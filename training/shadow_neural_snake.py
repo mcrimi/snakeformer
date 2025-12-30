@@ -436,7 +436,7 @@ class ShadowNeuralSnakeGame(NeuralSnakeGame):
             pass
 
         if self.game_over:
-            msg = " GAME OVER "
+            msg = " GAME OVER. Press (Q) to quit or (R) to restart. "
             if self.divergence_detected:
                 # We handle the specific message drawing in the divergence loop or main loop
                 # checking logic, but for static render:
