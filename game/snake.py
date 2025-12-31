@@ -17,6 +17,7 @@ COLOR_BORDER = 3
 COLOR_TEXT = 4
 COLOR_ACTION_USER = 5
 COLOR_ACTION_AUTO = 6
+COLOR_QUIT = 7
 
 
 class SnakeGame:
@@ -59,6 +60,7 @@ class SnakeGame:
         curses.init_pair(COLOR_TEXT, curses.COLOR_WHITE, -1)
         curses.init_pair(COLOR_ACTION_USER, curses.COLOR_CYAN, -1)
         curses.init_pair(COLOR_ACTION_AUTO, curses.COLOR_MAGENTA, -1)
+        curses.init_pair(COLOR_QUIT, curses.COLOR_BLACK, curses.COLOR_WHITE)
 
     def calculate_next_position(self, head, direction):
         new_head = [head[0], head[1]]
@@ -313,23 +315,15 @@ class SnakeGame:
             except curses.error:
                 pass
 
-    def render(self):
-        self.stdscr.erase()
+    def get_centered_offsets(self):
         sh, sw = self.stdscr.getmaxyx()
-
-        # Calculate offsets to center the game
-        # We need space for borders (Height + 2)
         offset_y = max(0, (sh - (self.game_height + 2)) // 2)
         offset_x = max(0, (sw - (self.game_width + 2) * 2) // 2)
+        return offset_y, offset_x
 
-        # Draw Border
-        self.draw_box(offset_y, offset_x, self.game_height, self.game_width)
-
-        # Content Offset (Inside the box)
+    def draw_snake(self, offset_y, offset_x):
         content_y = offset_y + 1
-        content_x = offset_x + 2  # 2 chars for left border
-
-        # Draw Snake
+        content_x = offset_x + 2
         for part in self.snake:
             try:
                 self.stdscr.addstr(
@@ -341,8 +335,10 @@ class SnakeGame:
             except curses.error:
                 pass
 
-        # Draw Food
+    def draw_food(self, offset_y, offset_x):
         if self.food:
+            content_y = offset_y + 1
+            content_x = offset_x + 2
             try:
                 self.stdscr.addstr(
                     content_y + self.food[0],
@@ -353,8 +349,9 @@ class SnakeGame:
             except curses.error:
                 pass
 
-        # Draw Score
-        score_text = f" Score: {self.score} "
+    def draw_score(self, offset_y, offset_x):
+        score_text = f" Score: {self.score}   "
+        quit_text = "'Q' to Quit"
         try:
             self.stdscr.addstr(
                 offset_y + self.game_height + 1,
@@ -362,36 +359,40 @@ class SnakeGame:
                 score_text,
                 curses.color_pair(COLOR_TEXT) | curses.A_BOLD,
             )
+            self.stdscr.addstr(
+                offset_y + self.game_height + 1,
+                offset_x + 2 + len(score_text),
+                quit_text,
+                curses.color_pair(COLOR_QUIT),
+            )
         except curses.error:
             pass
 
-        # Draw Game Over
-        if self.game_over:
-            msg1 = " 🐍 GAME OVER 🐍"
-            msg2 = "'R' to Restart or 'Q' to Quit  "
-            y = offset_y + self.game_height // 2
-            # Center relative to the full box width including borders
-            box_w = (self.game_width + 2) * 2
-            x1 = offset_x + (box_w - len(msg1)) // 2
-            x2 = offset_x + (box_w - len(msg2)) // 2
-            try:
-                self.stdscr.addstr(
-                    y,
-                    x1,
-                    msg1,
-                    curses.color_pair(COLOR_TEXT) | curses.A_REVERSE | curses.A_BOLD,
-                )
-                self.stdscr.addstr(
-                    y + 1,
-                    x2,
-                    msg2,
-                    curses.color_pair(COLOR_TEXT) | curses.A_REVERSE | curses.A_BOLD,
-                )
-            except curses.error:
-                pass
+    def draw_game_over_message(self, offset_y, offset_x):
+        msg1 = " 🐍 GAME OVER 🐍"
+        msg2 = "'R' to Restart or 'Q' to Quit  "
+        y = offset_y + self.game_height // 2
+        box_w = (self.game_width + 2) * 2
+        x1 = offset_x + (box_w - len(msg1)) // 2
+        x2 = offset_x + (box_w - len(msg2)) // 2
+        try:
+            self.stdscr.addstr(
+                y,
+                x1,
+                msg1,
+                curses.color_pair(COLOR_TEXT) | curses.A_REVERSE | curses.A_BOLD,
+            )
+            self.stdscr.addstr(
+                y + 1,
+                x2,
+                msg2,
+                curses.color_pair(COLOR_TEXT) | curses.A_REVERSE | curses.A_BOLD,
+            )
+        except curses.error:
+            pass
 
-        # Draw raw characters side Panels
-        # Left Panel (Board/Action)
+    def draw_left_panel(self, offset_y, offset_x):
+        sh, _ = self.stdscr.getmaxyx()
         lx = max(0, offset_x - 20)
         ly = offset_y
         try:
@@ -403,7 +404,8 @@ class SnakeGame:
         except curses.error:
             pass
 
-        # Right Panel (Target Board or 'X' for GAME OVER)
+    def draw_right_panel(self, offset_y, offset_x):
+        sh, _ = self.stdscr.getmaxyx()
         rx = offset_x + (self.game_width * 2) + 6
         ry = offset_y
         try:
@@ -415,7 +417,23 @@ class SnakeGame:
         except curses.error:
             pass
 
-        # Draw Action Log
+    def render(self):
+        self.stdscr.erase()
+        offset_y, offset_x = self.get_centered_offsets()
+
+        # Draw Border
+        self.draw_box(offset_y, offset_x, self.game_height, self.game_width)
+
+        # Draw Elements
+        self.draw_snake(offset_y, offset_x)
+        self.draw_food(offset_y, offset_x)
+        self.draw_score(offset_y, offset_x)
+
+        if self.game_over:
+            self.draw_game_over_message(offset_y, offset_x)
+
+        self.draw_left_panel(offset_y, offset_x)
+        self.draw_right_panel(offset_y, offset_x)
         self.draw_action_log()
 
         self.stdscr.refresh()

@@ -6,8 +6,10 @@ import torch
 import time
 
 
-# Add the parent directory to sys.path
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# Add the parent directory to sys.path if not already there
+parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if parent_dir not in sys.path:
+    sys.path.append(parent_dir)
 
 
 from game.neural_snake import (
@@ -378,41 +380,19 @@ class ShadowNeuralSnakeGame(NeuralSnakeGame):
             pass
 
     def render(self):
-        # Override to draw the 3rd panel
         self.stdscr.erase()
-        sh, sw = self.stdscr.getmaxyx()
+        offset_y, offset_x = self.get_centered_offsets()
 
-        offset_y = max(0, (sh - (self.game_height + 2)) // 2)
-        offset_x = max(0, (sw - (self.game_width + 2) * 2) // 2)
-
+        # Draw Border
         self.draw_box(offset_y, offset_x, self.game_height, self.game_width)
 
-        content_y = offset_y + 1
-        content_x = offset_x + 2
+        # Draw Elements
+        self.draw_snake(offset_y, offset_x)
+        self.draw_food(offset_y, offset_x)
 
-        for part in self.snake:
-            try:
-                self.stdscr.addstr(
-                    content_y + part[0],
-                    content_x + part[1] * 2,
-                    "██",
-                    curses.color_pair(1),
-                )  # COLOR_SNAKE
-            except curses.error:
-                pass
-
-        if self.food:
-            try:
-                self.stdscr.addstr(
-                    content_y + self.food[0],
-                    content_x + self.food[1] * 2,
-                    "██",
-                    curses.color_pair(2),
-                )  # COLOR_FOOD
-            except curses.error:
-                pass
-
-        score_text = f" Score: {self.score} "
+        # Draw Score with divergence text
+        score_text = f" Score: {self.score}   "
+        quit_text = "'Q' to Quit"
         if self.divergence_detected:
             score_text += " [DIVERGENCE DETECTED!] "
 
@@ -423,43 +403,27 @@ class ShadowNeuralSnakeGame(NeuralSnakeGame):
                 score_text,
                 curses.color_pair(4) | curses.A_BOLD,
             )
+            self.stdscr.addstr(
+                offset_y + self.game_height + 1,
+                offset_x + 2 + len(score_text),
+                quit_text,
+                curses.color_pair(7),
+            )
         except curses.error:
             pass
 
         if self.game_over:
-            msg = " GAME OVER. Press (Q) to quit or (R) to restart. "
-            if self.divergence_detected:
-                # We handle the specific message drawing in the divergence loop or main loop
-                # checking logic, but for static render:
-                pass
-
-            y = offset_y + self.game_height // 2
-            x = offset_x + (self.game_width * 2 - len(msg)) // 2
-            try:
-                if not self.divergence_detected:
-                    self.stdscr.addstr(
-                        y,
-                        x,
-                        msg,
-                        curses.color_pair(4) | curses.A_REVERSE | curses.A_BOLD,
-                    )
-            except curses.error:
-                pass
+            if not self.divergence_detected:
+                self.draw_game_over_message(offset_y, offset_x)
 
         if self.divergence_detected:
             self.draw_divergence_menu(offset_y, offset_x)
 
-        # Left Panel (Board/Action)
-        lx = max(0, offset_x - 20)
-        ly = offset_y
-        try:
-            for i, line in enumerate(self.left_panel):
-                if ly + i < sh:
-                    self.stdscr.addstr(ly + i, lx, line[:18], curses.color_pair(4))
-        except curses.error:
-            pass
+        # Left Panel (Parent logic)
+        self.draw_left_panel(offset_y, offset_x)
 
-        # Right Panel (Target Neural)
+        # Right Panel (Custom logic for highlighting)
+        sh, sw = self.stdscr.getmaxyx()
         rx = offset_x + (self.game_width * 2) + 6
         ry = offset_y
         try:
@@ -519,7 +483,6 @@ class ShadowNeuralSnakeGame(NeuralSnakeGame):
                             )  # Cyan Background for Expected
 
                         self.stdscr.addstr(sy + i, sx + j, char, color)
-
         except curses.error:
             pass
 
@@ -972,15 +935,10 @@ class ShadowNeuralSnakeGame(NeuralSnakeGame):
         self.prompt_save_model()
 
 
-def main(stdscr, model_filename="snake_model"):
+def main(stdscr, model_filename=None):
     # Paths
     base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-
-    if not model_filename.endswith(".pt"):
-        model_filename += ".pt"
-
-    model_path = os.path.join(base_dir, "model", "weigths", model_filename)
-    meta_path = os.path.join(base_dir, "model", "weigths", "meta.pkl")
+    model_dir = os.path.join(base_dir, "model", "weigths")
 
     # Select device
     if torch.cuda.is_available():
@@ -989,6 +947,20 @@ def main(stdscr, model_filename="snake_model"):
         device = "mps"
     else:
         device = "cpu"
+
+    # Model Selection Logic
+    if model_filename:
+        # If provided via arg (e.g. from play.py calling with specific model? No, play.py calls run_shadow_snake with loaded model)
+        # This main is for STANDALONE execution.
+        model_path = os.path.join(model_dir, model_filename)
+        if not model_filename.endswith(".pt"):
+            model_path = os.path.join(model_dir, model_filename + ".pt")
+        meta_path = os.path.join(model_dir, "meta.pkl")
+    else:
+        # Interactive Selection
+        model_path, meta_path = prompt_model_selection(stdscr, model_dir)
+        if not model_path:
+            return
 
     if not os.path.exists(model_path):
         stdscr.addstr(0, 0, f"Error: Model not found at {model_path}")
@@ -1002,46 +974,21 @@ def main(stdscr, model_filename="snake_model"):
         time.sleep(2)
         return
 
+    stdscr.clear()
     stdscr.addstr(10, 10, f"Loading Neural Model on {device}...")
-    stdscr.addstr(11, 10, f"Model: {model_filename}")
+    stdscr.addstr(11, 10, f"Model: {os.path.basename(model_path)}")
     stdscr.refresh()
 
-    with open(meta_path, "rb") as f:
-        meta = pickle.load(f)
-
-    config = GPTConfig(
-        vocab_size=meta["vocab_size"],
-        block_size=meta["block_size"],
-        n_embd=meta["n_embd"],
-        n_head=meta["n_head"],
-        n_layer=meta["n_layer"],
-        dropout=0.0,
-        device=device,
-    )
-
-    model = GPT(config)
-    state_dict = torch.load(model_path, map_location=device)
-    model.load_state_dict(state_dict)
-    model.to(device)
-    model.eval()
+    try:
+        model, meta = load_gpt_model(model_path, meta_path, device)
+    except Exception as e:
+        stdscr.addstr(12, 10, f"Error: {e}")
+        stdscr.getch()
+        return
 
     game = ShadowNeuralSnakeGame(stdscr, model, meta, device)
     game.run()
 
 
 if __name__ == "__main__":
-    print("--------------------------------------------------")
-    print("SHADOW NEURAL SNAKE - Model Selection")
-    print("--------------------------------------------------")
-    print("Enter the name of the model to load from model/weights/")
-    print("(Press Enter for default: 'snake_model')")
-
-    try:
-        model_name = input("Model Name: ").strip()
-    except KeyboardInterrupt:
-        sys.exit(0)
-
-    if not model_name:
-        model_name = "snake_model"
-
-    curses.wrapper(main, model_name)
+    curses.wrapper(main)
