@@ -19,6 +19,7 @@ from game.neural_snake import (
     CMD_RIGHT,
 )
 from model.gpt import GPT, GPTConfig
+from game.shared import prompt_model_selection, load_gpt_model
 
 
 class ShadowNeuralSnakeGame(NeuralSnakeGame):
@@ -37,18 +38,16 @@ class ShadowNeuralSnakeGame(NeuralSnakeGame):
             -1
         )  # Index in the current panel visual string (0-based) where mismatch happened
 
-        # Optimizer for RL correction
+        # Optimizer for online correction
         self.optimizer = torch.optim.AdamW(model.parameters(), lr=1e-4)
         self.model_updated = False
 
-        # We need a separate shadow state that mirrors the game state
-        # but evolves deterministically.
-
     def get_deterministic_next_state(self, current_snake, current_food, direction):
-        # Replicates SnakeGame.update physics
+        # This method replicates SnakeGame.update physics and it is used to generate the shadow target board
+        # It is deterministic and it is used to compare with the generated target board
 
         if not current_snake:
-            return None, None, True  # Should not happen
+            return None, None, True  # Check for game over
 
         head = current_snake[0]
         new_head = [head[0], head[1]]
@@ -90,6 +89,8 @@ class ShadowNeuralSnakeGame(NeuralSnakeGame):
         return new_snake, new_food, game_over
 
     def get_deterministic_food_spawn(self, snake):
+        # This method replicates SnakeGame.get_deterministic_food_spawn physics and it is used to generate the shadow target board
+
         head = snake[0]
         target_r = (head[0] + 5) % self.game_height
         target_c = (head[1] + 7) % self.game_width
@@ -131,10 +132,9 @@ class ShadowNeuralSnakeGame(NeuralSnakeGame):
         # We need to manually run the loop from GPT.generate
         # But for each token, check if it matches shadow_target_str
 
-        encode = lambda s: [self.stoi.get(c, self.stoi.get(".", 0)) for c in s]
-        decode = lambda l: "".join([self.itos[i] for i in l])
+        # But for each token, check if it matches shadow_target_str
 
-        context_idxs = encode(prompt)
+        context_idxs = self.encode_text(prompt)
         idx = torch.tensor(
             context_idxs, dtype=torch.long, device=self.device
         ).unsqueeze(0)
@@ -231,19 +231,12 @@ class ShadowNeuralSnakeGame(NeuralSnakeGame):
             # Re-create prompt to run full inference
             try:
                 # We need to reconstruct the prompt exactly as it was
-                board_str = self.get_logical_string()
+                board_str = self.render_board_state(self.snake, self.food)
                 action_char = KEY_STR_MAP.get(self.direction, "R")
 
-                if self.prev_board != "" and self.prev_generated != "":
-                    prev_board_str = f"{self.prev_board}\n{self.prev_generated}\n$"
-                    prompt = f"{prev_board_str}\nB:\n{board_str}\nA:{action_char}\nT:\n"
-                else:
-                    prompt = f"B:\n{board_str}\nA:{action_char}\nT:\n"
+                prompt = self.construct_prompt(board_str, action_char)
 
-                encode = lambda s: [self.stoi.get(c, self.stoi.get(".", 0)) for c in s]
-                decode = lambda l: "".join([self.itos[i] for i in l])
-
-                context_idxs = encode(prompt)
+                context_idxs = self.encode_text(prompt)
                 context = torch.tensor(
                     context_idxs, dtype=torch.long, device=self.device
                 ).unsqueeze(0)
@@ -252,7 +245,7 @@ class ShadowNeuralSnakeGame(NeuralSnakeGame):
                 output_ids = self.d_model.generate(
                     context, max_new_tokens=276, stop_token_id=self.stop_token_id
                 )
-                output_text = decode(output_ids[0].tolist())
+                output_text = self.decode_tokens(output_ids[0].tolist())
                 generated = output_text[len(prompt) :]
                 if "$" in generated:
                     generated = generated.split("$")[0]
@@ -300,14 +293,12 @@ class ShadowNeuralSnakeGame(NeuralSnakeGame):
 
         # -- SHADOW CALCULATION START --
         # Calculate what SHOULD happen based on physics
-        shadow_snake, shadow_food, shadow_game_over = self.get_deterministic_next_state(
-            self.snake, self.food, self.direction
+        shadow_snake, shadow_food, shadow_game_over, shadow_target_str = (
+            self.simulate_next_step(self.snake, self.food, self.direction)
         )
 
         if shadow_game_over:
             shadow_target_str = "X"
-        else:
-            shadow_target_str = self.render_logical_board(shadow_snake, shadow_food)
 
         self.shadow_panel = f"S:\n{shadow_target_str}".split("\n")
 
@@ -699,15 +690,11 @@ class ShadowNeuralSnakeGame(NeuralSnakeGame):
             # Actually, update() calculated 'shadow_target_str'. We should store that in self.
             # Let's assume we add self.shadow_target_str to update() in a moment.
             # For now, let's just re-calculate it to be safe and stateless here.
-            shadow_snake, shadow_food, shadow_game_over = (
-                self.get_deterministic_next_state(self.snake, self.food, self.direction)
+            shadow_snake, shadow_food, shadow_game_over, current_shadow_str = (
+                self.simulate_next_step(self.snake, self.food, self.direction)
             )
             if shadow_game_over:
                 current_shadow_str = "X"
-            else:
-                current_shadow_str = self.render_logical_board(
-                    shadow_snake, shadow_food
-                )
 
             # Prefix is the shadow string UP TO the divergence index
             prefix_str = current_shadow_str[: self.divergence_index]
@@ -715,8 +702,7 @@ class ShadowNeuralSnakeGame(NeuralSnakeGame):
             # Correct context: Prompt + Prefix
             full_context_str = self.prompt + prefix_str
 
-            encode = lambda s: [self.stoi.get(c, self.stoi.get(".", 0)) for c in s]
-            context_idxs = encode(full_context_str)
+            context_idxs = self.encode_text(full_context_str)
 
             # Fix: Truncate to block_size (1024) to avoid RuntimeErrors
             if len(context_idxs) > self.d_model.config.block_size:
@@ -996,7 +982,7 @@ def main(stdscr, model_filename="snake_model"):
     model_path = os.path.join(base_dir, "model", "weigths", model_filename)
     meta_path = os.path.join(base_dir, "model", "weigths", "meta.pkl")
 
-    # Device
+    # Select device
     if torch.cuda.is_available():
         device = "cuda"
     elif torch.backends.mps.is_available():
