@@ -2,7 +2,7 @@ import sys
 import os
 import curses
 import torch
-import time
+
 
 from collections import deque
 
@@ -11,9 +11,9 @@ parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if parent_dir not in sys.path:
     sys.path.append(parent_dir)
 
-from game.snake import SnakeGame
+from games.snake import SnakeGame
 
-from game.shared import prompt_model_selection, load_gpt_model
+from games.shared import prompt_model_selection, load_model
 
 # Key Mapping
 CMD_UP = curses.KEY_UP
@@ -26,8 +26,8 @@ KEY_STR_MAP = {CMD_UP: "U", CMD_DOWN: "D", CMD_LEFT: "L", CMD_RIGHT: "R"}
 
 class NeuralSnakeGame(SnakeGame):
     def __init__(self, stdscr, model, meta, device):
-        self.d_model = model
-        self.d_meta = meta
+        self.snakeformer = model
+        self.meta = meta
         self.device = device
         self.stoi = meta["stoi"]
         self.itos = meta["itos"]
@@ -76,7 +76,7 @@ class NeuralSnakeGame(SnakeGame):
             try:
                 with open(self.record_file, "a") as f:
                     f.write(entry + "\n")
-            except:
+            except Exception:
                 pass
 
     def handle_input(self):
@@ -85,7 +85,7 @@ class NeuralSnakeGame(SnakeGame):
         while True:
             try:
                 k = self.stdscr.getch()
-            except:
+            except Exception:
                 k = -1
             if k == -1:
                 break
@@ -160,13 +160,7 @@ class NeuralSnakeGame(SnakeGame):
 
         return final_key
 
-    def update(self):
-        if self.game_over:
-            return
-
-        # Get the logical string from the curses game state
-        board_str = self.render_board_state(self.snake, self.food)
-
+    def consume_input_queue(self):
         # Consuming Input Queue
         if self.input_queue:
             self.direction = self.input_queue.popleft()
@@ -175,7 +169,16 @@ class NeuralSnakeGame(SnakeGame):
         if self.direction is None:
             self.direction = curses.KEY_RIGHT
 
-        action_char = KEY_STR_MAP.get(self.direction, "R")
+        return KEY_STR_MAP.get(self.direction, "R")
+
+    def update(self):
+        if self.game_over:
+            return
+
+        # Get the logical string from the curses game state
+        board_str = self.render_board_state(self.snake, self.food)
+
+        action_char = self.consume_input_queue()
         self.action_history.append(("EXEC", action_char))
 
         # 1. Construct Prompt
@@ -189,7 +192,7 @@ class NeuralSnakeGame(SnakeGame):
 
         try:
             # Generate tokens
-            output_ids = self.d_model.generate(
+            output_ids = self.snakeformer.generate(
                 context, max_new_tokens=276, stop_token_id=self.stop_token_id
             )
             output_text = self.decode_tokens(output_ids[0].tolist())
@@ -215,7 +218,7 @@ class NeuralSnakeGame(SnakeGame):
             # 4. Recording & UI
             self.record_turn_data(board_str, action_char, generated)
 
-        except Exception as e:
+        except Exception:
             # If inference fails, maybe just game over or print error to log
             # self.game_over = True
             pass
@@ -223,7 +226,6 @@ class NeuralSnakeGame(SnakeGame):
     def update_state_from_ascii(self, ascii_board):
         lines = ascii_board.strip().split("\n")
 
-        new_snake = []
         new_food = None
         head = None
         body = []
@@ -304,11 +306,11 @@ def main(stdscr):
 
     # Loading Message
     stdscr.clear()
-    stdscr.addstr(10, 10, f"Loading Neural Model on {device}...")
+    stdscr.addstr(10, 10, f"Loading Snakeformer Model on {device}...")
     stdscr.refresh()
 
     try:
-        model, meta = load_gpt_model(model_path, meta_path, device)
+        model, meta = load_model(model_path, meta_path, device)
     except Exception as e:
         stdscr.addstr(12, 10, f"Error: {e}")
         stdscr.getch()

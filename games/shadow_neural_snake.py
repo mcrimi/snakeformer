@@ -1,7 +1,7 @@
 import sys
 import os
 import curses
-import pickle
+
 import torch
 import time
 
@@ -12,22 +12,27 @@ if parent_dir not in sys.path:
     sys.path.append(parent_dir)
 
 
-from game.neural_snake import (
+from games.neural_snake import (
     NeuralSnakeGame,
     KEY_STR_MAP,
-    CMD_UP,
-    CMD_DOWN,
-    CMD_LEFT,
-    CMD_RIGHT,
 )
-from model.gpt import GPT, GPTConfig
-from game.shared import prompt_model_selection, load_gpt_model
+from games.shared import prompt_model_selection, load_model
 
 
 class ShadowNeuralSnakeGame(NeuralSnakeGame):
+    """
+    A 'Shadow' game that validates Neural Snake's hallucinated moves against real physics.
+
+    It runs two engines in parallel:
+    1. The Neural Engine (Snakeformer) predicting the next board state.
+    2. The Shadow Engine (Deterministic) calculating the actual physics.
+
+    If they disagree, we catch it and let the user do something about it.
+    """
+
     def __init__(self, stdscr, model, meta, device):
         super().__init__(stdscr, model, meta, device)
-        self.shadow_panel = []
+        self.ground_truth_panel = []
         self.divergence_detected = False
         self.divergence_msg = ""
         self.ground_truth_token = 0
@@ -35,7 +40,6 @@ class ShadowNeuralSnakeGame(NeuralSnakeGame):
         self.ground_truth_str = ""
         self.prompt = ""
         self.sync_shadow_to_neural_pending = False
-        self.divergent_generated = ""
         self.divergence_index = (
             -1
         )  # Index in the current panel visual string (0-based) where mismatch happened
@@ -44,104 +48,27 @@ class ShadowNeuralSnakeGame(NeuralSnakeGame):
         self.optimizer = torch.optim.AdamW(model.parameters(), lr=1e-4)
         self.model_updated = False
 
-    def get_deterministic_next_state(self, current_snake, current_food, direction):
-        # This method replicates SnakeGame.update physics and it is used to generate the shadow target board
-        # It is deterministic and it is used to compare with the generated target board
+    def generate_verified_move(self, prompt, expected_board_str):
+        """
+        Generates tokens step-by-step from the model, validating each against the expected shadow target string coming from the
+        deterministic version of the game (snakeformer.game.neural_snake.NeuralSnakeGame).
+        Identifies the exact point of divergence if the model's output differs from the ground truth.
 
-        if not current_snake:
-            return None, None, True  # Check for game over
+        Args:
+            prompt (str): The input prompt to generate tokens from.
+            expected_board_str (str): The expected shadow target string coming from the deterministic version of the game.
 
-        head = current_snake[0]
-        new_head = [head[0], head[1]]
-
-        if direction == curses.KEY_UP:
-            new_head[0] -= 1
-        elif direction == curses.KEY_DOWN:
-            new_head[0] += 1
-        elif direction == curses.KEY_LEFT:
-            new_head[1] -= 1
-        elif direction == curses.KEY_RIGHT:
-            new_head[1] += 1
-
-        # Bounds Check
-        if (
-            new_head[0] < 0
-            or new_head[0] >= self.game_height
-            or new_head[1] < 0
-            or new_head[1] >= self.game_width
-        ):
-            return current_snake, current_food, True  # Game Over (Hit Wall)
-
-        # Self Collision
-        if new_head in current_snake:
-            return current_snake, current_food, True  # Game Over (Hit Self)
-
-        new_snake = [new_head] + current_snake
-
-        game_over = False
-        new_food = current_food
-
-        if new_head == current_food:
-            # Eat food, don't pop tail
-            # Spawn new food
-            new_food = self.get_deterministic_food_spawn(new_snake)
-        else:
-            new_snake.pop()  # Remove tail
-
-        return new_snake, new_food, game_over
-
-    def get_deterministic_food_spawn(self, snake):
-        # This method replicates SnakeGame.get_deterministic_food_spawn physics and it is used to generate the shadow target board
-
-        head = snake[0]
-        target_r = (head[0] + 5) % self.game_height
-        target_c = (head[1] + 7) % self.game_width
-
-        start_r, start_c = target_r, target_c
-
-        while [target_r, target_c] in snake:
-            target_c = (target_c + 1) % self.game_width
-            if target_c == 0:
-                target_r = (target_r + 1) % self.game_height
-
-            if (target_r, target_c) == (start_r, start_c):
-                return None  # Board full
-
-        return [target_r, target_c]
-
-    def render_logical_board(self, snake, food):
-        # Replicates get_logical_string
-        grid = [["." for _ in range(self.game_width)] for _ in range(self.game_height)]
-
-        if food:
-            if 0 <= food[0] < self.game_height and 0 <= food[1] < self.game_width:
-                grid[food[0]][food[1]] = "F"
-
-        for idx, part in enumerate(snake):
-            y, x = part[0], part[1]
-            if 0 <= y < self.game_height and 0 <= x < self.game_width:
-                if idx == 0:
-                    char = "H"
-                elif idx == len(snake) - 1:
-                    char = "#"
-                else:
-                    char = "O"
-                grid[y][x] = char
-
-        return "\n".join(["".join(row) for row in grid])
-
-    def step_by_step_generate_and_validate(self, prompt, shadow_target_str):
-        # We need to manually run the loop from GPT.generate
-        # But for each token, check if it matches shadow_target_str
-
-        # But for each token, check if it matches shadow_target_str
+        Returns:
+            tuple: A tuple containing the generated string, divergence found flag, divergence character index,
+                   ground truth character, ground truth token, generated token, and new character.
+        """
 
         context_idxs = self.encode_text(prompt)
         idx = torch.tensor(
             context_idxs, dtype=torch.long, device=self.device
         ).unsqueeze(0)
 
-        # Max tokens to generate
+        # Max tokens to generate (276 = 275 + 1 for '$' stop token)
         max_new_tokens = 276
 
         generated_so_far = ""
@@ -150,15 +77,15 @@ class ShadowNeuralSnakeGame(NeuralSnakeGame):
 
         for i in range(max_new_tokens):
             # crop context
-            idx_cond = idx[:, -self.d_model.config.block_size :]
+            idx_cond = idx[:, -self.snakeformer.config.block_size :]
 
-            # forward
-            logits, _ = self.d_model(idx_cond)
+            # forward pass
+            logits, _ = self.snakeformer(idx_cond)
             logits = logits[:, -1, :]
             probs = torch.nn.functional.softmax(logits, dim=-1)
             _, idx_next = torch.topk(probs, k=1, dim=-1)
 
-            # append
+            # append token to context
             idx = torch.cat((idx, idx_next), dim=1)
 
             # decode just this token
@@ -171,15 +98,11 @@ class ShadowNeuralSnakeGame(NeuralSnakeGame):
             generated_so_far += new_char
 
             # Check ground_truth token against generated token
-            if i < len(shadow_target_str):
-                ground_truth_char = shadow_target_str[i]
+            if i < len(expected_board_str):
+                ground_truth_char = expected_board_str[i]
                 ground_truth_token = self.stoi.get(
                     ground_truth_char, self.stoi.get(".", 0)
                 )
-                # FORCE DIVERGENCE FROM THE START
-                # Undocument to quickly test divergence
-                # ground_truth_token = self.stoi.get("H", 0)
-                # ——————
                 generated_token = idx_next.item()
                 if generated_token != ground_truth_token:
                     divergence_found = True
@@ -193,20 +116,14 @@ class ShadowNeuralSnakeGame(NeuralSnakeGame):
                     divergence_char_idx = i
                     break
 
-        # Post-loop check: Did we finish the shadow string?
+        # Post-loop validation: Check if the model generated the complete board sequence.
+        # If the model terminated prematurely (e.g., by emitting a stop token) before
+        # reaching the expected length of the shadow target, flag it as a divergence.
         if not divergence_found:
-            # We generated some text. Did we cover the whole shadow string?
-            # We ignore trailing whitespace in generated so_far for this length check check?
-            # Actually, generated_so_far might have \n at end.
-            # We just need to ensure we generated AT LEAST enough chars to cover shadow,
-            # which is implicit if we didn't break loop and i >= len(shadow) at end.
-
-            # Case: Generated "..." (short) then "$" break.
-            # len(generated_so_far) < len(shadow_target_str)
-            if len(generated_so_far.strip()) < len(shadow_target_str.strip()):
+            if len(generated_so_far.strip()) < len(expected_board_str.strip()):
                 divergence_found = True
+                # Mark the divergence at the end of the generated string.
                 divergence_char_idx = len(generated_so_far)
-                # This might be out of bounds for highlighting if we don't handle it
 
         return (
             generated_so_far,
@@ -218,168 +135,165 @@ class ShadowNeuralSnakeGame(NeuralSnakeGame):
             new_char,
         )
 
+    def _sync_state_from_inference(self):
+        """
+        Forces the game engine state to match the model's prediction.
+        Used when the user chooses to 'Continue' after a divergence.
+        """
+        try:
+            board_str = self.render_board_state(self.snake, self.food)
+            if self.direction is None:
+                self.direction = curses.KEY_RIGHT
+            action_char = KEY_STR_MAP.get(self.direction, "R")
+
+            # Generate full state prediction to align the engine
+            prompt = self.construct_prompt(board_str, action_char)
+            context_idxs = self.encode_text(prompt)
+            context = torch.tensor(
+                context_idxs, dtype=torch.long, device=self.device
+            ).unsqueeze(0)
+
+            output_ids = self.snakeformer.generate(
+                context, max_new_tokens=276, stop_token_id=self.stop_token_id
+            )
+            output_text = self.decode_tokens(output_ids[0].tolist())
+            generated = output_text[len(prompt) :]
+
+            if "$" in generated:
+                generated = generated.split("$")[0]
+            predicted_board_content = generated.strip()
+
+            # Update engine state to match the model's output
+            if "X" in predicted_board_content and len(predicted_board_content) < 10:
+                self.game_over = True
+            else:
+                self.update_state_from_ascii(predicted_board_content)
+
+            self.record_turn_data(board_str, action_char, predicted_board_content)
+
+            # Reset divergence tracking
+            self.divergence_detected = False
+            self.divergence_index = -1
+
+        except Exception:
+            pass
+
+        self.sync_shadow_to_neural_pending = False
+
+    def _capture_current_state(self, retry):
+        """Captures the current board string and determines the action character."""
+        board_str = self.render_board_state(self.snake, self.food)
+
+        if not retry:
+            action_char = self.consume_input_queue()
+            self.action_history.append(("EXEC", action_char))
+        else:
+            if self.direction is None:
+                self.direction = curses.KEY_RIGHT
+            action_char = KEY_STR_MAP.get(self.direction, "R")
+
+        return board_str, action_char
+
+    def _simulate_shadow_physics(self):
+        """Running the deterministic physics engine to get the expected next state."""
+        shadow_snake, shadow_food, shadow_game_over, expected_board_str = (
+            self.simulate_next_step(self.snake, self.food, self.direction)
+        )
+
+        if shadow_game_over:
+            expected_board_str = "X"
+
+        self.ground_truth_panel = f"T:\n{expected_board_str}".split("\n")
+
+        return expected_board_str, shadow_game_over
+
+    def _handle_divergence(
+        self, divergence_data, prompt, shadow_game_over, board_str, action_char
+    ):
+        """Sets up the state when a divergence is detected."""
+        (generated, _, div_idx, gt_char, gt_token, gen_token, gen_char) = (
+            divergence_data
+        )
+
+        self.ground_truth_token = gt_token
+        self.ground_truth_char = gt_char
+        self.generated_token = gen_token
+        self.generated_char = gen_char
+        self.prompt = prompt
+        self.divergence_detected = True
+        self.divergence_index = div_idx
+
+        # Determine why the divergence happened
+        if "X" in generated and not shadow_game_over:
+            self.divergence_msg = "Model predicted Die, but Physics says Live"
+        elif shadow_game_over and "X" not in generated:
+            self.divergence_msg = "Physics says Die, but Model predicted Live"
+        else:
+            self.divergence_msg = "Board State Mismatch"
+
+        # Update panels with partial (divergent) generation
+        self.left_panel = f"B:\n{board_str}\nA:{action_char}".split("\n")
+        self.right_panel = f"T:\n{generated}".split("\n")
+
+    def _apply_verified_state(self, generated, board_str, action_char):
+        """Updates the actual game state based on the verified prediction."""
+        predicted_board_content = generated.strip()
+        if "X" in predicted_board_content and len(predicted_board_content) < 10:
+            self.game_over = True
+        else:
+            self.update_state_from_ascii(predicted_board_content)
+
+        self.record_turn_data(board_str, action_char, predicted_board_content)
+
     def update(self, retry=False):
-        # 0. Sync State from Divergence Override (User chose 'Continue')
+        """
+        Main game loop iteration:
+        1. Syncs state if a divergence was overridden.
+        2. Captures board state and user input.
+        3. Calculates 'Shadow' ground truth via deterministic physics.
+        4. Generates model predictions token-by-token, validating against ground truth.
+        5. Flags divergence if the model hallucinates an invalid state.
+        """
+        # --- 0. State Synchronization ---
         if self.sync_shadow_to_neural_pending:
-            # We need to disregard divergence and assume the Neural Model is right
-            # This is tricky because we STOPPED generation at divergence.
-            # So "Continue" essentially means: "Finish generating without validation, then apply."
-
-            # TODO: Resume generation? Or just re-run full generation without validation?
-            # Re-running full generation is easier and essentially the same since it's deterministic (greedy decoding)
-            # EXCEPT we actually need to finish what we started.
-            # Let's just run standart generate() from prompt.
-
-            # Re-create prompt to run full inference
-            try:
-                # We need to reconstruct the prompt exactly as it was
-                board_str = self.render_board_state(self.snake, self.food)
-                action_char = KEY_STR_MAP.get(self.direction, "R")
-
-                prompt = self.construct_prompt(board_str, action_char)
-
-                context_idxs = self.encode_text(prompt)
-                context = torch.tensor(
-                    context_idxs, dtype=torch.long, device=self.device
-                ).unsqueeze(0)
-
-                # Standard Generation (No Validation)
-                output_ids = self.d_model.generate(
-                    context, max_new_tokens=276, stop_token_id=self.stop_token_id
-                )
-                output_text = self.decode_tokens(output_ids[0].tolist())
-                generated = output_text[len(prompt) :]
-                if "$" in generated:
-                    generated = generated.split("$")[0]
-                generated_stripped = generated.strip()
-
-                # Apply State
-                if "X" in generated_stripped and len(generated_stripped) < 10:
-                    self.game_over = True
-                else:
-                    self.update_state_from_ascii(generated_stripped)
-
-                # Update Panels
-                self.prev_board = f"B:\n{board_str}\nA:{action_char}"
-                self.prev_generated = f"T:\n{generated_stripped}"
-                self.left_panel = self.prev_board.split("\n")
-                self.right_panel = self.prev_generated.split("\n")
-
-                # Clear Divergence State
-                self.divergence_detected = False
-                self.divergence_index = -1
-                self.divergent_generated = ""
-
-            except Exception as e:
-                pass
-
-            self.sync_shadow_to_neural_pending = False
+            self._sync_state_from_inference()
             return
 
         if self.game_over or self.divergence_detected:
             return
 
-        # 1. Capture State Identical to NeuralSnakeGame
-        board_str = self.get_logical_string()
+        # --- 1. Capture Current Environment ---
+        board_str, action_char = self._capture_current_state(retry)
 
-        # Consuming Input Queue (Logic copied from NeuralSnakeGame)
-        if not retry:
-            if self.input_queue:
-                self.direction = self.input_queue.popleft()
-            if self.direction is None:
-                self.direction = curses.KEY_RIGHT
+        # -- 2. Shadow Calculation (Ground Truth) --
+        expected_board_str, shadow_game_over = self._simulate_shadow_physics()
 
-        action_char = KEY_STR_MAP.get(self.direction, "R")
-        if not retry:
-            self.action_history.append(("EXEC", action_char))
-
-        # -- SHADOW CALCULATION START --
-        # Calculate what SHOULD happen based on physics
-        shadow_snake, shadow_food, shadow_game_over, shadow_target_str = (
-            self.simulate_next_step(self.snake, self.food, self.direction)
-        )
-
-        if shadow_game_over:
-            shadow_target_str = "X"
-
-        self.shadow_panel = f"S:\n{shadow_target_str}".split("\n")
-
-        # -- NEURAL INFERENCE START ``
-        if self.prev_board != "" and self.prev_generated != "":
-            prev_board_str = f"{self.prev_board}\n{self.prev_generated}\n$"
-            prompt = f"{prev_board_str}\nB:\n{board_str}\nA:{action_char}\nT:\n"
-        else:
-            prompt = f"B:\n{board_str}\nA:{action_char}\nT:\n"
+        # -- 3. Neural Inference & Validation --
+        prompt = self.construct_prompt(board_str, action_char)
 
         try:
-            # Step-by-Step Generation & Validation
-            (
-                generated,
-                divergence,
-                div_idx,
-                ground_truth_char,
-                ground_truth_token,
-                generated_token,
-                generated_char,
-            ) = self.step_by_step_generate_and_validate(prompt, shadow_target_str)
-
-            # Store generated text for display (even if partial)
-            # If divergence, generated contains text up to mismatch + mismatch char
-            self.divergent_generated = generated
+            result = self.generate_verified_move(prompt, expected_board_str)
+            (generated, divergence, _, _, _, _, _) = result
 
             if divergence:
-                self.ground_truth_token = ground_truth_token
-                self.ground_truth_char = ground_truth_char
-                self.generated_token = generated_token
-                self.generated_char = generated_char
-                self.prompt = prompt
-                self.divergence_detected = True
-                self.divergence_index = div_idx
-
-                # Analyze "Physics Die vs Model Live" scenarios
-                if "X" in generated and not shadow_game_over:
-                    self.divergence_msg = "Model predicted Die, but Physics says Live"
-                elif shadow_game_over and "X" not in generated:
-                    self.divergence_msg = "Physics says Die, but Model predicted Live"
-                else:
-                    self.divergence_msg = "Board State Mismatch"
-
-                # Update panels with PARTIAL generation to show where it stopped
-                # BUT DO NOT update self.prev_board/generated yet, to allow retry/continue
-                # self.prev_board and self.prev_generated remain as they were before this step
-
-                # Create temporary display strings
-                temp_prev_board = f"B:\n{board_str}\nA:{action_char}"
-                temp_prev_generated = f"T:\n{generated}"
-
-                self.left_panel = temp_prev_board.split("\n")
-                self.right_panel = temp_prev_generated.split("\n")
-
+                self._handle_divergence(
+                    result, prompt, shadow_game_over, board_str, action_char
+                )
                 return
 
-            # If no divergence, we finished generation successfully
-            generated_stripped = generated.strip()
-            if "X" in generated_stripped and len(generated_stripped) < 10:
-                self.game_over = True
-            else:
-                self.update_state_from_ascii(generated_stripped)
+            # --- 4. Successful State Update ---
+            self._apply_verified_state(generated, board_str, action_char)
 
-            # SUCCESS: Update History
-            self.prev_board = f"B:\n{board_str}\nA:{action_char}"
-            self.prev_generated = f"T:\n{generated_stripped}"
-            self.left_panel = self.prev_board.split("\n")
-            self.right_panel = self.prev_generated.split("\n")
-
-            # Log
-            if self.record_file:
-                entry = f"{self.prev_board}\n{self.prev_generated}\n$"
-                with open(self.record_file, "a") as f:
-                    f.write(entry + "\n")
-
-        except Exception as e:
+        except Exception:
             pass
 
     def render(self):
+        """
+        Draws the game state, including the 3-panel layout:
+        [Current Board] | [Neural Prediction] | [Shadow Truth]
+
+        Also handles drawing the 'Divergence Detected' overlay when things go wrong.
+        """
         self.stdscr.erase()
         offset_y, offset_x = self.get_centered_offsets()
 
@@ -428,7 +342,7 @@ class ShadowNeuralSnakeGame(NeuralSnakeGame):
         ry = offset_y
         try:
             self.stdscr.addstr(
-                ry - 1, rx, "Neural (T):", curses.color_pair(4) | curses.A_BOLD
+                ry - 1, rx, "Predicted (T):", curses.color_pair(4) | curses.A_BOLD
             )
 
             for i, line in enumerate(self.right_panel):
@@ -455,19 +369,21 @@ class ShadowNeuralSnakeGame(NeuralSnakeGame):
         except curses.error:
             pass
 
-        # Shadow Panel (Target Shadow)
+        # Ground Truth Panel (Target Shadow)
         sx = rx + 20
         sy = offset_y
         try:
             self.stdscr.addstr(
-                sy - 1, sx, "Shadow (S):", curses.color_pair(4) | curses.A_BOLD
+                sy - 1, sx, "Shadow (T):", curses.color_pair(4) | curses.A_BOLD
             )
-            for i, line in enumerate(self.shadow_panel):
+            for i, line in enumerate(self.ground_truth_panel):
                 if sy + i < sh:
                     # Draw char by char to handle highlighting matching the neural one
                     for j, char in enumerate(line):
                         # Reconstruct index in the FULL string "S:\n....."
-                        raw_idx = sum(len(l) + 1 for l in self.shadow_panel[:i]) + j
+                        raw_idx = (
+                            sum(len(l) + 1 for l in self.ground_truth_panel[:i]) + j
+                        )
 
                         # The board string starts after "S:\n", which is length 3.
                         board_idx = raw_idx - 3
@@ -633,6 +549,12 @@ class ShadowNeuralSnakeGame(NeuralSnakeGame):
         time.sleep(0.5)  # Pause to let user see
 
     def run_online_training(self):
+        """
+        Calculates loss and updates the model weights on the fly!
+
+        We force the model to learn from the exact context where it failed,
+        providing the correct shadow character as the target to minimize loss.
+        """
         curses.flash()
         self.action_history.append(("SYS", "Online Training Triggered"))
 
@@ -668,8 +590,8 @@ class ShadowNeuralSnakeGame(NeuralSnakeGame):
             context_idxs = self.encode_text(full_context_str)
 
             # Fix: Truncate to block_size (1024) to avoid RuntimeErrors
-            if len(context_idxs) > self.d_model.config.block_size:
-                context_idxs = context_idxs[-self.d_model.config.block_size :]
+            if len(context_idxs) > self.snakeformer.config.block_size:
+                context_idxs = context_idxs[-self.snakeformer.config.block_size :]
 
             # Debug: Check if lengths match expectation
             # print(f"Div Index: {self.divergence_index}, Prefix Len: {len(prefix_str)}")
@@ -692,7 +614,7 @@ class ShadowNeuralSnakeGame(NeuralSnakeGame):
             )
 
             # 3. Train Step
-            loss, probs = self.d_model.train_step(
+            loss, probs = self.snakeformer.train_step(
                 self.optimizer, context_tensor, target_tensor, importance_weight=weight
             )
 
@@ -730,20 +652,6 @@ class ShadowNeuralSnakeGame(NeuralSnakeGame):
 
         return True
 
-    def sync_shadow_state(self):
-        # Force shadow state to match current neural generation
-        # We need to parse self.prev_generated (which is T) and set self.snake, self.food
-        # But wait, self.update_state_from_ascii(generated) ALREADY updated the game state (self.snake, self.food)
-        # to match the neural output (unless it was 'X').
-
-        # If divergence was "Board State Mismatch", 'generated' was NOT X.
-        # But in update(), if divergence is detected:
-        # if generated != shadow_target_str: divergence_detected = True ... return
-        # So we returned BEFORE calling update_state_from_ascii(generated) if we wanted to be strict?
-        # Let's check my update() implementation.
-        pass
-        # Taking a look at update() in next step to correct flow.
-
     def handle_game_over_input(self):
         try:
             key = self.stdscr.getch()
@@ -757,6 +665,10 @@ class ShadowNeuralSnakeGame(NeuralSnakeGame):
         return None
 
     def prompt_save_model(self):
+        """
+        If the model learned anything new, ask the user if they want to save
+        the updated weights to disk.
+        """
         if not self.model_updated:
             return
 
@@ -836,7 +748,7 @@ class ShadowNeuralSnakeGame(NeuralSnakeGame):
 
         # Save
         try:
-            torch.save(self.d_model.state_dict(), save_path)
+            torch.save(self.snakeformer.state_dict(), save_path)
             succ = f"Saved to {fname}"
             self.stdscr.addstr(
                 y + 8,
@@ -857,6 +769,10 @@ class ShadowNeuralSnakeGame(NeuralSnakeGame):
         self.stdscr.nodelay(True)
 
     def reset_game(self):
+        """
+        Resets the board state (snake position, food, score) but KEEPS the neural model.
+        Useful for restarting after a Game Over without reloading the heavyweight model.
+        """
         # Reset Game State but KEEP Model
         # Call super reset to match SnakeGame logic (center start, calculate food)
         # But we need to handle specific attributes ourselves if super doesn't
@@ -876,11 +792,10 @@ class ShadowNeuralSnakeGame(NeuralSnakeGame):
         self.action_history.clear()
 
         # Shadow/Divergence State
-        self.shadow_panel = []
+        self.ground_truth_panel = []
         self.divergence_detected = False
         self.divergence_msg = ""
         self.divergence_index = -1
-        self.divergent_generated = ""
         self.ground_truth_token = 0
         self.ground_truth_char = ""
         self.prev_board = ""
@@ -890,8 +805,13 @@ class ShadowNeuralSnakeGame(NeuralSnakeGame):
         # We do NOT reset self.model_updated, so user can still save later if they want
 
     def run(self):
+        """
+        Main game loop for shadow tracking and divergence detection.
+        """
+
+        # Main Loop - while not quit or game over
         while True:
-            # Check Divergence Input separate from Game Input
+            # Check for token level divergence between shadow ground truth and model prediction
             if self.divergence_detected:
                 try:
                     key = self.stdscr.getch()
@@ -899,12 +819,13 @@ class ShadowNeuralSnakeGame(NeuralSnakeGame):
                     key = -1
 
                 if key == ord("q") or key == ord("Q"):
+                    # User chooses to quit - break out of loop
                     break
                 elif key == ord("c") or key == ord("C"):
-                    # Force synchronize shadow to neural
+                    # User chooses to continue with the game - force synchronize shadow to model prediction
                     self.sync_shadow_to_neural_pending = True
                 elif key == ord("t") or key == ord("T"):
-                    # Calculate loss and backpropagate until converged
+                    # Let's do some training 🐍
                     self.run_online_training()
 
             elif self.game_over:
@@ -919,10 +840,11 @@ class ShadowNeuralSnakeGame(NeuralSnakeGame):
                 # Regular Gameplay
                 key = self.handle_input()
                 if key == ord("q") or key == ord("Q"):
+                    # User chooses to quit - break out of loop
                     break
 
                 if key == -1:
-                    pass  # No input, just continue to update (which handles default/queue)
+                    pass  # No input, just continue to update with the momentum board
 
             self.update()
 
@@ -931,7 +853,7 @@ class ShadowNeuralSnakeGame(NeuralSnakeGame):
             else:
                 self.render()
 
-        # On Exit Loop
+        # On Exit Loop - save the new model if user wants to
         self.prompt_save_model()
 
 
@@ -975,12 +897,12 @@ def main(stdscr, model_filename=None):
         return
 
     stdscr.clear()
-    stdscr.addstr(10, 10, f"Loading Neural Model on {device}...")
+    stdscr.addstr(10, 10, f"Loading Snakeformer Model on {device}...")
     stdscr.addstr(11, 10, f"Model: {os.path.basename(model_path)}")
     stdscr.refresh()
 
     try:
-        model, meta = load_gpt_model(model_path, meta_path, device)
+        model, meta = load_model(model_path, meta_path, device)
     except Exception as e:
         stdscr.addstr(12, 10, f"Error: {e}")
         stdscr.getch()
