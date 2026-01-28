@@ -1,7 +1,4 @@
 import curses
-import random
-import time
-import os
 import argparse
 from collections import deque
 
@@ -170,7 +167,7 @@ class SnakeGame:
     def handle_input(self):
         try:
             key = self.stdscr.getch()
-        except:
+        except curses.error:
             key = -1
 
         if key == -1:

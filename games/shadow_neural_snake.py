@@ -703,7 +703,7 @@ class ShadowNeuralSnakeGame(NeuralSnakeGame):
                 return
 
         # Ask for Filename
-        prompt = "Filename (in model/weigths/): "
+        prompt = "Filename (in model/weights/): "
         self.stdscr.addstr(
             y + 4, x + 2, prompt, curses.color_pair(4) | curses.A_REVERSE
         )
@@ -724,7 +724,7 @@ class ShadowNeuralSnakeGame(NeuralSnakeGame):
 
         # Path logic
         base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        save_path = os.path.join(base_dir, "model", "weigths", fname)
+        save_path = os.path.join(base_dir, "model", "weights", fname)
 
         # Check overwrite
         if os.path.exists(save_path):
@@ -860,7 +860,7 @@ class ShadowNeuralSnakeGame(NeuralSnakeGame):
 def main(stdscr, model_filename=None):
     # Paths
     base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    model_dir = os.path.join(base_dir, "model", "weigths")
+    model_dir = os.path.join(base_dir, "model", "weights")
 
     # Select device
     if torch.cuda.is_available():

@@ -2,18 +2,16 @@ import sys
 import os
 import curses
 import random
-import copy
-import collections
 import argparse
-import pickle
+import collections
 import time
 import torch
 
 # Add parent directory to path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from games.snake import SnakeGame
 from games.shared import prompt_model_selection, load_model
+from games.utils import MockStdScr, HeadlessSnakeGame, get_heatmap_grid
 
 # Constants
 CMD_UP = curses.KEY_UP
@@ -24,49 +22,7 @@ CMD_RIGHT = curses.KEY_RIGHT
 KEY_STR_MAP = {CMD_UP: "U", CMD_DOWN: "D", CMD_LEFT: "L", CMD_RIGHT: "R"}
 
 
-class MockStdScr:
-    def nodelay(self, *args):
-        pass
-
-    def timeout(self, *args):
-        pass
-
-    def addstr(self, *args):
-        pass
-
-    def erase(self):
-        pass
-
-    def refresh(self):
-        pass
-
-    def getch(self):
-        return -1
-
-    def getmaxyx(self):
-        return (20, 36)
-
-
-class HeadlessSnakeGame(SnakeGame):
-    def setup_curses(self):
-        # For headless/data-gen, we manage curses ourselves or mock it
-        if self.stdscr:
-            self.stdscr.nodelay(1)
-
-    def step(self, action):
-        if action in [CMD_UP, CMD_DOWN, CMD_LEFT, CMD_RIGHT]:
-            self.direction = action
-        self.update()
-
-    def clone(self):
-        # Clones never need to draw, so always MockStdScr
-        new_game = HeadlessSnakeGame(MockStdScr())
-        new_game.score = self.score
-        new_game.game_over = self.game_over
-        new_game.snake = copy.deepcopy(self.snake)
-        new_game.direction = self.direction
-        new_game.food = list(self.food) if self.food else None
-        return new_game
+# MockStdScr and HeadlessSnakeGame are imported from games.utils
 
 
 class HeadlessNeuralSnake(HeadlessSnakeGame):
@@ -86,8 +42,8 @@ class HeadlessNeuralSnake(HeadlessSnakeGame):
         def encode(s):
             return [self.stoi.get(c, self.stoi.get(".", 0)) for c in s]
 
-        def decode(l):
-            return "".join([self.itos[i] for i in l])
+        def decode(ids_list):
+            return "".join([self.itos[i] for i in ids_list])
 
         context = torch.tensor(
             encode(prompt), dtype=torch.long, device=self.device
@@ -99,7 +55,7 @@ class HeadlessNeuralSnake(HeadlessSnakeGame):
             output_text = decode(output_ids[0].tolist())
             generated = output_text[len(prompt) :].split("$")[0]
             return generated.strip()
-        except:
+        except Exception:
             return "X"
 
 
@@ -163,7 +119,7 @@ def draw_dashboard(stdscr, game, title, counts, targets, start_time):
 
     # 1. Game View (Left)
     # Reusing SnakeGame drawing methods
-    # Game size is roughly 16x16 chars (logical) -> 32x16 visual
+    # Game size is 16x16 chars (logical) -> 32x16 visual
     # Box is (16+2)*2 wide = 36 chars.
     game_y, game_x = 2, 2
 
@@ -189,12 +145,10 @@ def draw_dashboard(stdscr, game, title, counts, targets, start_time):
         if row_y >= sh - 4:
             break
         count = counts.get(cat, 0)
-        pct = count / target if target > 0 else 0
-
-        # Mini bar
-        bar_len = 10
-        filled = int(bar_len * pct)
-        bar = "[" + "=" * filled + " " * (bar_len - filled) + "]"
+        # Mini bar - unused now
+        # bar_len = 10
+        # filled = int(bar_len * pct)
+        # bar = "[" + "=" * filled + " " * (bar_len - filled) + "]"
 
         # line = f"{cat:<15} {bar} {count}/{target}"
         line = f"{cat:<15} | {count:<6} | {target:<6}"
@@ -285,6 +239,7 @@ def run_curriculum_gen(stdscr, target_size=500000, test_mode=False):
 
     current_counts = {k: 0 for k in target_counts}
     visited_counts = collections.defaultdict(int)
+    seen_transitions = set()
 
     # Use real stdscr if interactive, else mock
     game = HeadlessSnakeGame(stdscr if stdscr else MockStdScr())
@@ -304,6 +259,29 @@ def run_curriculum_gen(stdscr, target_size=500000, test_mode=False):
             target_counts,
             start_time,
         )
+        stdscr.nodelay(1)
+
+    def should_record(cat, base_prob=1.0):
+        # Dampen probability as we get closer to target
+        # P = base_prob * (1 - current / target)
+        if current_counts[cat] >= target_counts[cat]:
+            return False
+
+        progress = current_counts[cat] / target_counts[cat]
+        prob = base_prob * (1.0 - progress)
+        return random.random() < prob
+
+    def save_transition(f, b_str, a_str, t_str, cat):
+        # 1. Deduplicate
+        key = (b_str.strip(), a_str.strip())
+        if key in seen_transitions:
+            return False
+
+        # 2. Save
+        f.write(f"B:\n{b_str}\nA:{a_str}\nT:\n{t_str}\n$\n")
+        seen_transitions.add(key)
+        current_counts[cat] += 1
+        return True
 
     with open(output_file, "w") as f:
         while sum(current_counts.values()) < sum(target_counts.values()):
@@ -340,14 +318,13 @@ def run_curriculum_gen(stdscr, target_size=500000, test_mode=False):
                 elif is_body:
                     cat = "Self-collision"
 
-                if cat and current_counts[cat] < target_counts[cat]:
+                if cat and should_record(cat, 1.0):
                     # Reconstruct last state (approximate since we don't have prev_food easily without tracking)
                     # But actually, SnakeGame state IS the pre-crash state (except direction is updated).
                     # So we can just render.
                     s_curr = game.render_board_state(game.snake, game.food)
                     act_str = KEY_STR_MAP.get(game.direction, "R")
-                    f.write(f"B:\n{s_curr}\nA:{act_str}\nT:\nX\n$\n")
-                    current_counts[cat] += 1
+                    save_transition(f, s_curr, act_str, "X", cat)
 
                 game.reset_game()
 
@@ -355,7 +332,7 @@ def run_curriculum_gen(stdscr, target_size=500000, test_mode=False):
 
             # Eat (Glutton)
             if (
-                current_counts["Eat"] < target_counts["Eat"]
+                should_record("Eat", 1.0)
                 and abs(head[0] - food[0]) + abs(head[1] - food[1]) == 1
             ):
                 dy, dx = food[0] - head[0], food[1] - head[1]
@@ -374,11 +351,10 @@ def run_curriculum_gen(stdscr, target_size=500000, test_mode=False):
                         if not c.game_over
                         else "X"
                     )
-                    f.write(f"B:\n{s1}\nA:{KEY_STR_MAP[act]}\nT:\n{s2}\n$\n")
-                    current_counts["Eat"] += 1
+                    save_transition(f, s1, KEY_STR_MAP[act], s2, "Eat")
 
             # Long (Fat)
-            if len(game.snake) >= 15 and current_counts["Long"] < target_counts["Long"]:
+            if len(game.snake) >= 15 and should_record("Long", 1.0):
                 p = bot.get_path_to_food()
                 act = p[0] if p else bot.get_safe_random()
                 s1 = game.render_board_state(game.snake, game.food)
@@ -386,42 +362,41 @@ def run_curriculum_gen(stdscr, target_size=500000, test_mode=False):
                 c.step(act)
                 if not c.game_over:
                     s2 = c.render_board_state(c.snake, c.food)
-                    f.write(f"B:\n{s1}\nA:{KEY_STR_MAP[act]}\nT:\n{s2}\n$\n")
-                    current_counts["Long"] += 1
+                    save_transition(f, s1, KEY_STR_MAP[act], s2, "Long")
 
             # Non-optimal (Drunk)
-            if (
-                current_counts["Non-optimal"] < target_counts["Non-optimal"]
-                and random.random() < 0.15
-            ):
+            if should_record("Non-optimal", 0.15):
                 act = bot.get_safe_random()
                 c = game.clone()
                 c.step(act)
                 if not c.game_over:
-                    f.write(
-                        f"B:\n{game.render_board_state(game.snake, game.food)}\nA:{KEY_STR_MAP[act]}\nT:\n{c.render_board_state(c.snake, c.food)}\n$\n"
+                    save_transition(
+                        f,
+                        game.render_board_state(game.snake, game.food),
+                        KEY_STR_MAP[act],
+                        c.render_board_state(c.snake, c.food),
+                        "Non-optimal",
                     )
-                    current_counts["Non-optimal"] += 1
 
             # Standard
-            if (
-                current_counts["Standard"] < target_counts["Standard"]
-                and random.random() < 0.1
-            ):
+            if should_record("Standard", 0.1):
                 p = bot.get_path_to_food()
                 act = p[0] if p else bot.get_safe_random()
                 c = game.clone()
                 c.step(act)
                 if not c.game_over:
-                    f.write(
-                        f"B:\n{game.render_board_state(game.snake, game.food)}\nA:{KEY_STR_MAP[act]}\nT:\n{c.render_board_state(c.snake, c.food)}\n$\n"
+                    save_transition(
+                        f,
+                        game.render_board_state(game.snake, game.food),
+                        KEY_STR_MAP[act],
+                        c.render_board_state(c.snake, c.food),
+                        "Standard",
                     )
-                    current_counts["Standard"] += 1
 
                 # --- Forced Events for Rare Categories ---
 
                 # Illegal (180 Turn)
-                if current_counts["Illegal"] < target_counts["Illegal"]:
+                if should_record("Illegal", 1.0):
                     opp_dir = {
                         CMD_UP: CMD_DOWN,
                         CMD_DOWN: CMD_UP,
@@ -438,28 +413,18 @@ def run_curriculum_gen(stdscr, target_size=500000, test_mode=False):
                             else c.render_board_state(c.snake, c.food)
                         )
 
-                        f.write(
-                            f"B:\n{game.render_board_state(game.snake, game.food)}\nA:{KEY_STR_MAP[opp_dir]}\nT:\n{next_s}\n$\n"
+                        save_transition(
+                            f,
+                            game.render_board_state(game.snake, game.food),
+                            KEY_STR_MAP[opp_dir],
+                            next_s,
+                            "Illegal",
                         )
-                        current_counts["Illegal"] += 1
-
-                        # Visual Flash for Illegal (Show at head)
-                        if stdscr:
-                            sy, sx = 2 + head[0], 2 + head[1] * 2
-                            stdscr.addstr(sy, sx, "??", curses.color_pair(2))
-                            stdscr.refresh()
-                            time.sleep(0.02)
-
-            # Determine Next Action
-            # Priority: Force Death (Hit Wall/Self) if needed > Eat > Survive
 
             forced_act = None
 
             # Check if we need forced death
-            if (
-                current_counts["Hit Wall"] < target_counts["Hit Wall"]
-                or current_counts["Self-collision"] < target_counts["Self-collision"]
-            ):
+            if should_record("Hit Wall", 0.2) or should_record("Self-collision", 0.2):
                 # Look for a move that KILLS us in the desired way
                 for move, (dy, dx) in [
                     (CMD_UP, (-1, 0)),
@@ -483,18 +448,11 @@ def run_curriculum_gen(stdscr, target_size=500000, test_mode=False):
                     obstacles = set(tuple(p) for p in game.snake[:-1])
                     is_body = (ny, nx) in obstacles
 
-                    if (
-                        is_wall
-                        and current_counts["Hit Wall"] < target_counts["Hit Wall"]
-                    ):
+                    if is_wall and should_record("Hit Wall", 1.0):
                         if random.random() < 0.1:
                             forced_act = move
                             break  # Found a way to die by wall
-                    elif (
-                        is_body
-                        and current_counts["Self-collision"]
-                        < target_counts["Self-collision"]
-                    ):
+                    elif is_body and should_record("Self-collision", 1.0):
                         if random.random() < 0.1:
                             forced_act = move
                             break  # Found a way to die by body
@@ -541,6 +499,7 @@ def run_curriculum_gen(stdscr, target_size=500000, test_mode=False):
             ]
         )
         draw_summary(stdscr, "Curriculum Generation Complete", summary_lines)
+        stdscr.nodelay(0)
         draw_heatmap(stdscr, visited_counts)
 
 
@@ -638,24 +597,8 @@ def draw_heatmap(stdscr, visited_counts):
 
     max_count = max(visited_counts.values()) if visited_counts else 1
 
-    # Draw simple heatmap
-    # Assuming board is 16x32 logical approx?
-    # We'll just list top stats or draw a small ASCII grid if possible.
-    # Actually let's just make a text grid since game size is known (12x28 logical? or similar)
-    # HeadlessSnakeGame defaults: height=16, width=32 (curses units).
-    # Game logical area: (16-4) x (32//2 - 2) = 12 x 14 roughly?
-    # Let's dynamically determine bounds.
-
-    ys = [p[0] for p in visited_counts.keys()]
-    xs = [p[1] for p in visited_counts.keys()]
-    if not ys:
-        return
-
-    min_y, max_y = min(ys), max(ys)
-    min_x, max_x = min(xs), max(xs)
-
-    h = max_y - min_y + 1
-    w = max_x - min_x + 1
+    # Heatmap logic moved to games.utils
+    grid_lines, max_count = get_heatmap_grid(visited_counts)
 
     stdscr.addstr(
         1, 2, "Board Coverage Heatmap (Dark=Low, Bright=High)", curses.color_pair(1)
@@ -664,23 +607,8 @@ def draw_heatmap(stdscr, visited_counts):
     start_y = 3
     start_x = 2
 
-    for r in range(h):
-        for c in range(w):
-            y = min_y + r
-            x = min_x + c
-            count = visited_counts.get((y, x), 0)
-
-            char = "."
-            if count > 0:
-                char = "░"
-            if count > max_count * 0.3:
-                char = "▒"
-            if count > max_count * 0.6:
-                char = "▓"
-            if count > max_count * 0.9:
-                char = "█"
-
-            # Draw
+    for r, line_str in enumerate(grid_lines):
+        for c, char in enumerate(line_str):
             if start_y + r < sh - 1 and start_x + c * 2 < sw - 1:
                 stdscr.addstr(start_y + r, start_x + c * 2, char)
 
@@ -902,11 +830,11 @@ def run_manual_gen(stdscr, target_size=500000):
             r"   Data Generator   ",
             r"  SnakeFormer Tools ",
         ]
-        for i, l in enumerate(title):
+        for i, line in enumerate(title):
             stdscr.addstr(
                 sh // 2 - 8 + i,
-                max(0, (sw - len(l)) // 2),
-                l,
+                max(0, (sw - len(line)) // 2),
+                line,
                 curses.color_pair(1) | curses.A_BOLD,
             )
 
@@ -932,14 +860,14 @@ def run_manual_gen(stdscr, target_size=500000):
                 inp = get_input_str(stdscr, "Enter Target Dataset Size (default 500k):")
                 try:
                     target = int(inp) if inp.strip() else 500000
-                except:
+                except ValueError:
                     target = 500000
                 run_curriculum_gen(stdscr, target_size=target)
 
             elif sel == 1:  # DAgger
                 path, meta_path = prompt_model_selection(
                     stdscr,
-                    os.path.join(os.path.dirname(__file__), "..", "model", "weigths"),
+                    os.path.join(os.path.dirname(__file__), "..", "model", "weights"),
                 )
                 if path:
                     dev = "cuda" if torch.cuda.is_available() else "cpu"
@@ -957,7 +885,7 @@ def run_manual_gen(stdscr, target_size=500000):
                         )
                         try:
                             target = int(inp) if inp.strip() else 2000
-                        except:
+                        except ValueError:
                             target = 2000
 
                         run_dagger_gen(
@@ -976,7 +904,7 @@ def run_manual_gen(stdscr, target_size=500000):
                 )
                 try:
                     target = int(inp) if inp.strip() else 500
-                except:
+                except ValueError:
                     target = 500
                 run_manual_gen(stdscr, target_size=target)
 
@@ -998,10 +926,16 @@ def main_tui(stdscr):
     curses.init_pair(8, curses.COLOR_BLACK, curses.COLOR_WHITE)  # MENU_HIGHLIGHT
 
     menu_opts = [
-        "Curriculum Generation",
-        "DAgger Corrections",
-        "Manual Play (Record Dataset)",
+        "Generate Pre-Training Dataset - Autoplay 🤖",
+        "Generate Pre-Training Dataset - Play Manualy 👤",
+        "Generate Fine-tuning Dataset  🧠",
         "Quit",
+    ]
+    subtitles = [
+        "Heuristic bot plays the deterministic game, we record the board states and actions to generate curriculum dataset.",
+        "You play the deterministic game, we record the board states and actions to generate curriculum dataset.",
+        "Heuristic bot plays on neural snake, we record the board states and transitions where the model gets it wrong in a dataset to fine tune the model a la DAgger",
+        "Leave this nonsense.",
     ]
     sel = 0
 
@@ -1009,17 +943,11 @@ def main_tui(stdscr):
         stdscr.clear()
         sh, sw = stdscr.getmaxyx()
 
-        # ASCII Title (Slanted Style)
-        #    ___       __         ______
-        #   / _ \___ _/ /____ _  / ____/__ ___
-        #  / // / _ `/ __/ _ `/ / / __/ -_) _ \
-        # /____/\_,_/\__/\_,_/ /_/ /_/\__/_//_/
-
         ascii_header = [
-            r"   ___       __         ______           ",
-            r"  / _ \___ _/ /____ _  / ____/__ ___     ",
-            r" / // / _ `/ __/ _ `/ / / __/ -_) _ \    ",
-            r"/____/\_,_/\__/\_,_/ /_/ /_/\__/_//_/    ",
+            r"   ___       __      ",
+            r"  / _ \___ _/ /____ _",
+            r" / // / _ `/ __/ _ `/",
+            r"/____/\_,_/\__/\_,_/ ",
         ]
 
         start_y = max(1, sh // 2 - 10)
@@ -1045,6 +973,15 @@ def main_tui(stdscr):
                 stdscr.attron(curses.color_pair(8))
                 stdscr.addstr(y, x - 2, f"  {opt}  ")
                 stdscr.attroff(curses.color_pair(8))
+
+                # Subtitle
+                if idx < len(subtitles):
+                    sub = subtitles[idx]
+                    sy = menu_y_start + len(menu_opts) * 2 + 1
+                    if sy < sh - 1:
+                        stdscr.addstr(
+                            sy, max(0, (sw - len(sub)) // 2), sub, curses.color_pair(5)
+                        )
             else:
                 stdscr.addstr(y, x, opt, curses.color_pair(3))
 
@@ -1060,14 +997,24 @@ def main_tui(stdscr):
                 inp = get_input_str(stdscr, "Enter Target Dataset Size (default 500k):")
                 try:
                     target = int(inp) if inp.strip() else 500000
-                except:
+                except ValueError:
                     target = 500000
                 run_curriculum_gen(stdscr, target_size=target)
 
-            elif sel == 1:  # DAgger
+            elif sel == 1:  # Manual (Swapped from 2)
+                inp = get_input_str(
+                    stdscr, "Enter Target Size (Reference) (default 500):"
+                )
+                try:
+                    target = int(inp) if inp.strip() else 500
+                except ValueError:
+                    target = 500
+                run_manual_gen(stdscr, target_size=target)
+
+            elif sel == 2:  # DAgger (Swapped from 1)
                 path, meta_path = prompt_model_selection(
                     stdscr,
-                    os.path.join(os.path.dirname(__file__), "..", "model", "weigths"),
+                    os.path.join(os.path.dirname(__file__), "..", "model", "weights"),
                 )
                 if path:
                     dev = "cuda" if torch.cuda.is_available() else "cpu"
@@ -1085,7 +1032,7 @@ def main_tui(stdscr):
                         )
                         try:
                             target = int(inp) if inp.strip() else 2000
-                        except:
+                        except ValueError:
                             target = 2000
 
                         run_dagger_gen(
@@ -1097,16 +1044,6 @@ def main_tui(stdscr):
                         )
                     except Exception as e:
                         draw_summary(stdscr, "Error Loading Model", [str(e)[: sw - 4]])
-
-            elif sel == 2:  # Manual
-                inp = get_input_str(
-                    stdscr, "Enter Target Size (Reference) (default 500):"
-                )
-                try:
-                    target = int(inp) if inp.strip() else 500
-                except:
-                    target = 500
-                run_manual_gen(stdscr, target_size=target)
 
             elif sel == 3:
                 break

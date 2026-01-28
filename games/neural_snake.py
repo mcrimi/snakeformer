@@ -290,7 +290,7 @@ class NeuralSnakeGame(SnakeGame):
 
 def main(stdscr):
     base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    model_dir = os.path.join(base_dir, "model", "weigths")
+    model_dir = os.path.join(base_dir, "model", "weights")
 
     # Device
     if torch.cuda.is_available():

@@ -113,7 +113,7 @@ def main(stdscr):
     curses.init_pair(5, curses.COLOR_CYAN, -1)  # Shadow
 
     base_dir = os.path.dirname(os.path.abspath(__file__))
-    model_dir = os.path.join(base_dir, "model", "weigths")
+    model_dir = os.path.join(base_dir, "model", "weights")
 
     # Device
     if torch.cuda.is_available():

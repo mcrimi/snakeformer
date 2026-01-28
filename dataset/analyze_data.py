@@ -7,50 +7,10 @@ import collections
 # Add parent directory to path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from games.snake import SnakeGame
+from games.utils import MockStdScr, HeadlessSnakeGame, get_heatmap_grid
 
 
-class MockStdScr:
-    def nodelay(self, *args):
-        pass
-
-    def timeout(self, *args):
-        pass
-
-    def addstr(self, *args):
-        pass
-
-    def erase(self):
-        pass
-
-    def refresh(self):
-        pass
-
-    def getch(self):
-        return -1
-
-    def getmaxyx(self):
-        return (20, 36)
-
-    def curs_set(self, *args):
-        pass
-
-    def start_color(self):
-        pass
-
-    def use_default_colors(self):
-        pass
-
-    def init_pair(self, *args):
-        pass
-
-
-class HeadlessSnakeGame(SnakeGame):
-    def setup_curses(self):
-        # Override to do nothing or set nodelay on mock
-        if self.stdscr:
-            # self.stdscr.nodelay(1)
-            pass
+# MockStdScr and HeadlessSnakeGame are imported from games.utils
 
 
 def parse_board(board_str):
@@ -114,26 +74,19 @@ def find_snake_path(current, target, body_set, path, visited):
 def print_heatmap(visited_counts):
     print("\n[Board Heatmap]")
 
-    max_count = max(visited_counts.values()) if visited_counts else 1
+    # Heatmap logic moved to games.utils
+    grid_lines, max_count = get_heatmap_grid(visited_counts)
 
     # Header
     print("  " + "".join([str(c % 10) for c in range(16)]))
 
-    for r in range(16):
-        row_str = f"{r % 10} "
-        for c in range(16):
-            count = visited_counts.get((r, c), 0)
-            char = "."
-            if count > 0:
-                char = "░"
-            if count > max_count * 0.3:
-                char = "▒"
-            if count > max_count * 0.6:
-                char = "▓"
-            if count > max_count * 0.9:
-                char = "█"
-            row_str += char
-        print(row_str)
+    for r, line_str in enumerate(grid_lines):
+        # We need to prepend the row number
+        # line_str contains compact chars "░...█"
+        # We verify if line_str length matches 16?
+        # get_heatmap_grid forces 0-15 bounds by default in utils.py logic implemented.
+        row_label = f"{r % 10} "
+        print(row_label + line_str)
 
 
 def analyze_dataset(filename):
@@ -156,9 +109,15 @@ def analyze_dataset(filename):
         lines = chunk.strip().split("\n")
         try:
             # Parse B, A, T
-            idx_b = next(i for i, l in enumerate(lines) if l.startswith("B:"))
-            idx_a = next(i for i, l in enumerate(lines) if l.startswith("A:"))
-            idx_t = next(i for i, l in enumerate(lines) if l.startswith("T:"))
+            idx_b = next(
+                i for i, line_str in enumerate(lines) if line_str.startswith("B:")
+            )
+            idx_a = next(
+                i for i, line_str in enumerate(lines) if line_str.startswith("A:")
+            )
+            idx_t = next(
+                i for i, line_str in enumerate(lines) if line_str.startswith("T:")
+            )
 
             str_b = "\n".join(lines[idx_b + 1 : idx_a])
             act_char = lines[idx_a].split(":")[1].strip()
