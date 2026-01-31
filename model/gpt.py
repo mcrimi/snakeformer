@@ -12,7 +12,7 @@ class GPTConfig:
     n_head: int
     n_layer: int
     dropout: float = 0.0
-    device: str = "cpu"
+    device: str = "cpu" # "cpu" or "cuda" or "mps"
 
 
 class Head(nn.Module):
@@ -98,7 +98,7 @@ class GPT(nn.Module):
         super().__init__()
         self.config = config
         # each token directly reads off the logits for the next token from a lookup table
-        self.token_embedding_table = nn.Embedding(config.vocab_size, config.n_embd)
+        self.token_embedding_table = nn.Embedding(config.vocab_size, config.n_embd)  
         self.position_embedding_table = nn.Embedding(config.block_size, config.n_embd)
         self.blocks = nn.Sequential(*[Block(config) for _ in range(config.n_layer)])
         self.ln_f = nn.LayerNorm(config.n_embd)  # final layer norm
