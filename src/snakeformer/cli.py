@@ -1,6 +1,7 @@
 """Command line.
 
     snakeformer train <run>     train one of the named runs (hours on a laptop)
+    snakeformer polish <source> correct a model on its own mistakes during play
     snakeformer build           measure every model on disk and write the page's data
     snakeformer fixtures        re-export the JavaScript test cases from the shipped weights
 """
@@ -75,6 +76,9 @@ def main(argv=None) -> None:
     t.add_argument("--steps", type=int, default=STEPS)
     t.add_argument("--train-n", type=int, default=TRAIN_N)
     t.add_argument("--out", default="runs")
+    p = sub.add_parser("polish", help="shadow-mode corrections over many games")
+    p.add_argument("source", help='"original" or the name of a finished run')
+    p.add_argument("--games", type=int, default=300)
     sub.add_parser("build", help="measure the models and write web/data")
     sub.add_parser("fixtures", help="re-export the JavaScript test cases")
     args = parser.parse_args(argv)
@@ -83,6 +87,10 @@ def main(argv=None) -> None:
 
         result = run(args.run, args.out, args.steps, args.train_n)
         print({k: v for k, v in result.items() if k != "log"}, result["log"][-1])
+    elif args.command == "polish":
+        from .experiments import polish_run
+
+        print(polish_run(args.source, n_games=args.games)["log"][-1])
     elif args.command == "build":
         build()
     else:

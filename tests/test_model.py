@@ -142,3 +142,19 @@ def test_a_weights_file_reads_back_as_the_same_model(tmp_path, tiny):
     with torch.no_grad():
         assert torch.equal(twin(x), again(x))
     assert header["encoding"] == "arrows"
+
+
+def test_a_correction_fixes_the_frame_it_is_given():
+    from snakeformer.online import correct, first_slips
+
+    examples = generate(12, seed=3)
+    model = train(examples, ARROWS, steps=200, batch=12, config=SMALL, lr=3e-3)
+    moves = [(e.state, e.action, e.next) for e in examples]
+    before = first_slips(model, ARROWS, moves)
+    assert any(s is not None for s in before)  # not learned yet
+    wrong = next(i for i, s in enumerate(before) if s is not None)
+    opt = torch.optim.AdamW(model.parameters(), lr=1e-3)
+    steps = correct(model, opt, ARROWS, moves[wrong], attempts=3000)
+    assert 0 < steps < 3000 and first_slips(model, ARROWS, [moves[wrong]]) == [None]
+    right = exact(model, examples, ARROWS)
+    assert [s is None for s in first_slips(model, ARROWS, moves)] == right
