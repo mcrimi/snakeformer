@@ -1,1 +1,18 @@
-[{"id": "original", "file": "original.bin", "label": "Published, 2026", "note": "The checkpoint on Hugging Face: 6 layers, 2.9M parameters, boards drawn with H, O and #."}]
+[
+ {
+  "id": "arrows",
+  "file": "arrows.bin",
+  "label": "Retrained, arrows",
+  "note": "Trained for this page: 4 layers, 0.9M parameters. Each body segment points to the next.",
+  "bytes": 1861284,
+  "default": true
+ },
+ {
+  "id": "original",
+  "file": "original.bin",
+  "label": "Published, 2026",
+  "note": "The checkpoint on Hugging Face: 6 layers, 2.9M parameters, boards drawn with H, O and #.",
+  "bytes": 5743796,
+  "default": false
+ }
+]

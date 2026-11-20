@@ -1,0 +1,485 @@
+---
+title: "A model of a game is not the game"
+subtitle: "Measuring Snakeformer, a transformer trained from scratch to write the next frame of Snake"
+author: "Mariano Crimi"
+format:
+  html:
+    toc: true
+    toc-depth: 2
+    embed-resources: true
+    theme: none
+    minimal: true
+    css: paper.css
+    include-in-header: header.html
+    include-before-body: before.html
+    html-math-method: mathml
+    highlight-style: none
+    code-fold: true
+    code-summary: "Code"
+    fig-width: 7
+    fig-height: 4.2
+    fig-dpi: 160
+execute:
+  echo: true
+  warning: false
+jupyter: python3
+bibliography: references.bib
+---
+
+```{python}
+#| include: false
+import json
+from pathlib import Path
+
+import matplotlib.pyplot as plt
+import pandas as pd
+from IPython.display import Markdown
+
+from snakeformer import ARROWS, FRAME
+from snakeformer.engine import State, step
+
+INK = "#1B1B19"
+plt.rcParams.update({
+    "figure.facecolor": "white", "axes.facecolor": "white", "savefig.facecolor": "white",
+    "text.color": INK, "axes.edgecolor": INK, "axes.labelcolor": INK,
+    "xtick.color": INK, "ytick.color": INK, "axes.spines.top": False,
+    "axes.spines.right": False, "axes.linewidth": 0.6, "font.size": 10,
+    "legend.frameon": False, "lines.color": INK, "axes.prop_cycle": plt.cycler(color=[INK]),
+})
+STYLES = ["-", "--", ":", "-."]
+
+root = Path.cwd() if (Path.cwd() / "web").exists() else Path.cwd().parent
+D = json.loads((root / "web" / "data" / "experiments.json").read_text())
+M, RUNS, POLISH, AGG = D["models"], D["runs"], D["polish"], D["aggregate"]
+NAMES = {"original": "Published, 2026", "frame-aligned": "Retrained, H O #",
+         "arrows-aligned": "Retrained, arrows", "arrows-aligned-aggregated": "Retrained, then mistakes",
+         "original-aggregated": "Published, then mistakes", "frame-stream": "2026 recipe, H O #"}
+pct = lambda v, d=1: "–" if v is None else f"{100 * v:.{d}f}%"
+table = lambda df, **kw: Markdown(df.to_markdown(index=False, **kw))
+
+
+def hard(m):
+    kinds = [v for k, v in m["stress"]["kinds"].items() if k in ("move", "eat", "wall", "self", "reversal")]
+    return sum(v["right"] for v in kinds) / sum(v["n"] for v in kinds)
+
+
+def kind(m, k):
+    return m["stress"]["kinds"][k]["share"]
+
+
+O, A, F = M["original"], M["arrows-aligned"], M["frame-aligned"]
+G = M["arrows-aligned-aggregated"]
+P_ORIG, P_ARROWS = POLISH["original-polished-mortal"], POLISH["arrows-aligned-polished-mortal"]
+P_CAREFUL = POLISH["original-polished"]
+```
+
+## Summary
+
+Snakeformer is a small decoder-only transformer that I trained from scratch in 2026 to stand in
+for the game of Snake. It reads a 16 by 16 board as text, reads a move, and writes the next
+board one character at a time. I judged it then by playing it. This report measures it against
+the real rules, and measures the ideas in the original write-up.
+
+```{python}
+#| echo: false
+first, last = AGG["arrows-aligned-aggregated"]["log"][0], AGG["arrows-aligned-aggregated"]["log"][-1]
+Markdown(f"""
+- **A high share of right frames is still a short game.** The published model writes
+  {pct(O['play']['frames']['share'])} of frames exactly right in ordinary play. Half of
+  {D['games']['n']} games had left the real game by turn {O['play']['median_first_error']}, and
+  {O['play']['clean_games']} were still right after 400 turns.
+- **Each model is good where its data was.** The published model gets {pct(hard(O))} of
+  {D['test_n']:,} hard positions right, and {pct(kind(O, 'reversal'), 0)} of the moves the
+  terminal game never let it see. A smaller network trained on hard positions gets
+  {pct(hard(A))} of those and only {pct(A['play']['frames']['share'])} in ordinary play.
+- **Correcting one mistake at a time does not settle.** Shadow Mode left running for 300 games
+  moved the published model from {pct(P_ORIG['log'][0]['play'])} to {pct(P_ORIG['log'][-1]['play'])}
+  in play with large swings on the way, and made the retrained model worse. Its fifty-fold
+  weight on important mistakes has no effect, because every step is clipped to the same length.
+- **Collecting the mistakes and retraining works.** Three rounds took the retrained model from
+  {pct(first['play'])} to {pct(last['play'])} in play while it kept {pct(last['all'])} on the
+  hard positions.
+- **The drawing of the board has a flaw that I could not make matter.** With H, O and # some
+  pictures fit two different snakes. Drawing the body with arrows removes the ambiguity, and
+  changes the scores very little.
+""")
+```
+
+## The task
+
+A turn is a piece of text. The board, the move, then the frame to be written:
+
+```{python}
+#| echo: false
+s = State(((7, 7), (7, 6), (6, 6), (5, 6), (4, 6)), (7, 13))
+nxt, _ = step(s, "U")
+text = FRAME.prompt(s, "U") + FRAME.target(nxt)
+lines = text.split("\n")
+Markdown("```text\n" + "\n".join(lines[:1] + lines[5:10] + ["…"] + lines[17:20] + lines[23:28] + ["…", "$"]) + "\n```")
+```
+
+The prompt is 282 characters and the answer 274. A frame counts as right only if every
+character of the answer is right. The model is greedy: at each position it writes the
+character it finds most likely. Because the correct answer is fed back as it goes, the first
+character it gets wrong when shadowing the rules is also the first it would get wrong on its
+own, so the two ways of scoring agree frame for frame (there is a test for this).
+
+Two kinds of test are used throughout.
+
+- **Ordinary play.** `{python} D['games']['n']` games of up to 400 turns by a player that heads
+  for the food and never reverses, `{python} f"{D['games']['frames']:,}"` frames. Snakes reach
+  length `{python} D['games']['max_length']`.
+- **Hard positions.** `{python} f"{D['test_n']:,}"` positions built to cover what play rarely
+  shows: snakes laid in long coils, food beside the head, every kind of death, and reversals.
+  None of them is among the positions the retrained models learned from.
+
+## One picture, two snakes
+
+The original write-up tells how the model could not shorten the snake until the tail had its
+own character. The same problem survives one level down. The body is drawn with a single
+character, so the picture does not say in which order the segments come. If the tail touches
+two body cells, either may be the next-to-last segment, and that is where the tail goes next.
+
+```{python}
+#| echo: false
+a = State(((3, 3), (3, 2), (2, 2), (2, 3), (1, 3), (1, 2), (1, 1), (2, 1), (3, 1)), None)
+b = State(((3, 3), (2, 3), (1, 3), (1, 2), (1, 1), (2, 1), (2, 2), (3, 2), (3, 1)), None)
+crop = lambda text: [row[:6] for row in text.split("\n")[:5]]
+side = lambda *cols: "\n".join("    ".join(parts) for parts in zip(*cols))
+same = FRAME.board(a) == FRAME.board(b)
+na, nb = step(a, "R")[0], step(b, "R")[0]
+Markdown(f"""Two snakes, drawn with arrows that point from each segment to the next (left, right),
+and the one picture both make with H, O and # (middle). The pictures are identical: **{same}**.
+
+```text
+{side(crop(ARROWS.board(a)), crop(FRAME.board(a)), crop(ARROWS.board(b)))}
+```
+
+After one move to the right the two games differ:
+
+```text
+{side(crop(FRAME.board(na)), ["      "] * 5, crop(FRAME.board(nb)))}
+```
+""")
+```
+
+```{python}
+#| echo: false
+#| fig-cap: "Share of ordinary moves whose H, O, # picture fits two different snakes, by snake length, with 95% intervals. No model is involved."
+amb = D["ambiguity"]
+fig, ax = plt.subplots(figsize=(7, 3))
+ys = range(len(amb))
+ax.barh(ys, [x["share"] for x in amb], color=INK, height=0.6)
+ax.hlines(ys, [x["lo"] for x in amb], [x["hi"] for x in amb], color="#8a8a86", lw=3)
+ax.set_yticks(ys, [f"Length {x['length']}" for x in amb])
+ax.invert_yaxis()
+ax.xaxis.set_major_formatter(lambda v, _: f"{100 * v:.0f}%")
+ax.set_xlabel("Share of ordinary moves with two readings")
+plt.show()
+```
+
+Short snakes are never ambiguous. Long coiled ones usually are. Drawing the body with arrows
+makes one frame hold the whole snake. To see whether this matters to a model, I trained the
+same network once with each drawing and tested both on 1,000 held-out positions that have two
+readings.
+
+```{python}
+#| echo: false
+rows = [{"Model": NAMES[k], "Boards drawn with": "Arrows" if M[k]["encoding"] == "arrows" else "H O #",
+         "Two-reading positions right": pct(M[k]["two_readings"]["share"]),
+         "95% interval": f"{pct(M[k]['two_readings']['lo'], 0)} to {pct(M[k]['two_readings']['hi'], 0)}"}
+        for k in ("original", "frame-aligned", "arrows-aligned")]
+table(pd.DataFrame(rows))
+```
+
+A model that had to guess between two readings would be right half the time. The H, O, # models
+do much better than that, because in the games they were trained on one reading is far more
+common than the other: a snake that has been following the food lies in a predictable way.
+The flaw is real, and a model can lean on the habits of its player to hide it. In play the
+original game also keeps the previous turn in the context, which in principle settles the
+question. Measured on 400 frames generated exactly as the terminal game does it, that made no
+difference: `{python} D['context']['cold']['right']` right without the previous turn,
+`{python} D['context']['previous_turn']['right']` with it.
+
+## Right frames and whole games
+
+```{python}
+#| echo: false
+#| fig-cap: "Share of games in which every frame so far is right, by turn."
+fig, ax = plt.subplots()
+for i, k in enumerate(["arrows-aligned-aggregated", "original", "arrows-aligned", "frame-aligned"]):
+    ax.plot(M[k]["play"]["alive"], STYLES[i], color=INK, lw=1.4, label=NAMES[k])
+ax.set_xlabel("Turn")
+ax.set_ylim(0, 1)
+ax.yaxis.set_major_formatter(lambda v, _: f"{100 * v:.0f}%")
+ax.legend()
+plt.show()
+```
+
+```{python}
+#| echo: false
+rows = [{"Model": NAMES[k], "Parameters": f"{M[k]['params'] / 1e6:.2f}M",
+         "Frames right in play": pct(M[k]["play"]["frames"]["share"]),
+         "Median first wrong frame": M[k]["play"]["median_first_error"],
+         "Games right to the end": f"{M[k]['play']['clean_games']} of {M[k]['play']['games']}",
+         "Hard positions": pct(hard(M[k]))}
+        for k in ("original", "frame-aligned", "arrows-aligned", "arrows-aligned-aggregated") if k in M]
+table(pd.DataFrame(rows))
+```
+
+If a model is right on a share $p$ of frames, independently, the chance that a game is still
+right after $t$ turns is $p^t$. At $p = 0.98$ that is one in two after 34 turns. The games here
+last longer than that, so mistakes are not independent: they come in clusters, and some games
+have many while others have none for a long time. The practical point stands. The rules are right every time, and a simulator that is
+right 98 or 99 times in 100 becomes a different game within a few hundred turns. The measure
+that matters for a learned simulator is the length of an error-free run, and per-frame accuracy
+flatters it.
+
+## Good where the data was
+
+```{python}
+#| echo: false
+labels = {"move": "Ordinary move", "eat": "Eating", "wall": "Hitting a wall", "self": "Hitting itself",
+          "reversal": "Turning back on itself"}
+ids = [k for k in ("original", "frame-aligned", "arrows-aligned", "arrows-aligned-aggregated") if k in M]
+rows = [{"Position": lab, "Positions": M["original"]["stress"]["kinds"][k]["n"],
+         **{NAMES[i]: pct(kind(M[i], k)) for i in ids}} for k, lab in labels.items()]
+rows.append({"Position": "All hard positions", "Positions": D["test_n"], **{NAMES[i]: pct(hard(M[i])) for i in ids}})
+rows.append({"Position": "Ordinary play", "Positions": D["games"]["frames"],
+             **{NAMES[i]: pct(M[i]["play"]["frames"]["share"]) for i in ids}})
+table(pd.DataFrame(rows))
+```
+
+The published model was trained on games played by bots and polished on games played by me.
+It is strong there. A reversal, the snake turning straight back into its own neck, is a death
+by the rules; the terminal game filters that key out before the model is asked, so the model
+never needed the answer and does not have it. Eating is right almost every time in play and
+about half the time in the hard positions, where the food has been put beside the head of a
+long snake.
+
+The retrained network has a third of the parameters and was trained for this report on
+300,000 positions weighted towards the hard cases. It is nearly perfect on deaths and
+reversals and worse than the published model in ordinary play. Its remaining mistakes on hard
+positions are of two kinds: declaring a death that did not happen, and leaving the tail where
+it was, as if the snake had eaten.
+
+Neither model has the rules. Each has the positions it was shown, and a test set drawn the same
+way as the training set would have reported either of them as nearly perfect.
+
+## Learning from its own mistakes
+
+### One at a time
+
+Shadow Mode runs the rules beside the model. At the first character where the model departs
+from the true frame it takes one gradient step on exactly that context and that character
+(AdamW, learning rate 1e-4, gradient clipped to length 0.5), and tries again, up to ten times.
+A mistake counts fifty times over if it involves the head, the food or a death. The published
+model had been through some of this by hand; how much was not recorded.
+
+Here the loop runs unattended for 300 games. Every 30 games the model is scored on 60 games and
+on the hard positions, none of which it is being corrected on.
+
+```{python}
+#| echo: false
+#| fig-cap: "Frames right in 60 held-out games while the model is corrected one mistake at a time."
+fig, ax = plt.subplots()
+for i, (run, label) in enumerate([(P_ORIG, "Published"), (P_ARROWS, "Retrained"),
+                                  (P_CAREFUL, "Published, player never dies")]):
+    ax.plot([r["games"] for r in run["log"]], [r["play"] for r in run["log"]], STYLES[i], color=INK,
+            lw=1.4, label=label)
+ax.set_xlabel("Games played with corrections switched on")
+ax.yaxis.set_major_formatter(lambda v, _: f"{100 * v:.0f}%")
+ax.legend()
+plt.show()
+```
+
+```{python}
+#| echo: false
+def trail(run, label):
+    return [{"Run": label, "Games": r["games"], "Corrections": r["corrections"], "In play": pct(r["play"]),
+             "First wrong frame (median)": r["median_first_error"], "Hard positions": pct(r["all"]),
+             "Wall": pct(r["wall"], 0), "Itself": pct(r["self"], 0), "Eating": pct(r["eat"], 0)}
+            for r in run["log"][:: max(1, len(run["log"]) // 5)]]
+
+table(pd.DataFrame(trail(P_ORIG, "Published") + trail(P_ARROWS, "Retrained")
+                   + trail(P_CAREFUL, "Published, player never dies")))
+```
+
+Three things come out of it.
+
+**It does not settle.** A single step fixes the frame in front of it and moves every other
+answer a little. Scores swing by several points between one check and the next.
+
+**It learns the player.** With a careful player that almost never dies, frames in play rise to
+`{python} pct(P_CAREFUL['log'][-1]['play'])` while the model forgets how to die: deaths at a
+wall go from `{python} pct(P_CAREFUL['log'][0]['wall'], 0)` right to
+`{python} pct(P_CAREFUL['log'][-1]['wall'], 0)`. Each false death that is corrected pushes the
+death character down, and in games without deaths nothing pushes it back.
+
+**The fifty-fold weight does nothing.** The weight multiplies the loss, and so the gradient,
+and the gradient is then clipped to length 0.5.
+
+```{python}
+#| echo: false
+rows = [{"Run": label, "Steps, unweighted": g["plain_steps"], "of which clipped": g["plain_clipped"],
+         "Typical length before clipping": f"{g['plain_median']:.0f}",
+         "Steps, weighted ×50": g["weighted_steps"], "of which clipped ": g["weighted_clipped"],
+         "Typical length before clipping ": f"{g['weighted_median']:,.0f}"}
+        for label, g in (("Published", P_ORIG["gradient"]), ("Retrained", P_ARROWS["gradient"]))]
+table(pd.DataFrame(rows))
+```
+
+Every step in both runs was long enough to be clipped, weighted or not, so every step that
+reached the optimiser had the same length. To make important mistakes count for more, the
+weight would have to act after the clipping, for example on the learning rate.
+
+### Collect, then retrain
+
+The other way is dataset aggregation, DAgger [@ross2011]. The model shadows 600 games. Every
+frame it gets wrong is kept. It is then trained for 1,500 steps at learning rate 1e-4 on
+batches drawn half from all the mistakes kept so far and half from the positions it first
+learned from. Three rounds.
+
+```{python}
+#| echo: false
+rows = []
+for name, run in AGG.items():
+    for r in run["log"]:
+        rows.append({"Model": NAMES[run["source"] if run["source"] == "original" else run["source"]],
+                     "Round": r["round"], "Frames shadowed": r["frames_seen"], "New mistakes": r["new_mistakes"],
+                     "In play": pct(r["play"]), "First wrong frame (median)": r["median_first_error"],
+                     "Games right to the end": f"{r['clean_games']} of 60", "Hard positions": pct(r["all"])})
+table(pd.DataFrame(rows))
+```
+
+Each round finds fewer new mistakes than the one before, play improves round over round, and
+the hard positions are kept because they are rehearsed. The difference from Shadow Mode is not
+the data, which is the same kind of mistake. It is that the mistakes are learned together and
+alongside what the model already knew, with a step size that averages over 64 examples. The
+retrained model after three rounds is the default on the page.
+
+## How it is trained
+
+The 2026 training joined all examples into one text, cut windows of 1,024 characters from
+random places, and scored every character. Half of those characters are the input board and the move,
+which the model is never asked to produce, and a window can begin anywhere inside an example. The retraining puts
+one example in each sequence, always from position 0, and scores only the answer. Both read
+about the same number of characters per step.
+
+```{python}
+#| echo: false
+#| fig-cap: "Hard positions exactly right during training, same network and same positions."
+fig, ax = plt.subplots()
+for i, k in enumerate([k for k in ("arrows-aligned", "frame-aligned", "frame-stream") if k in RUNS]):
+    curve = RUNS[k]["curve"]
+    ax.plot([0] + [r["step"] for r in curve], [0] + [r["all"] for r in curve], STYLES[i], color=INK, lw=1.4,
+            label=NAMES[k])
+ax.set_xlabel("Training steps")
+ax.set_ylim(0, 1)
+ax.yaxis.set_major_formatter(lambda v, _: f"{100 * v:.0f}%")
+ax.legend()
+plt.show()
+```
+
+```{python}
+#| echo: false
+rows = [{"Run": NAMES[k], "Boards": RUNS[k]["encoding"], "Sequences": RUNS[k]["mode"],
+         "Hard positions after 20,000 steps": pct(RUNS[k]["curve"][-1]["all"]),
+         "Ordinary moves": pct(RUNS[k]["curve"][-1]["move"]), "Eating": pct(RUNS[k]["curve"][-1]["eat"])}
+        for k in ("arrows-aligned", "frame-aligned", "frame-stream") if k in RUNS]
+table(pd.DataFrame(rows))
+```
+
+The two drawings of the board finish together. The two ways of cutting sequences do not.
+
+## Can randomness be learned?
+
+The original write-up says no: with food appearing at random, the same board and move have
+many right answers, and a model trained to predict the next character cannot learn that. I
+made the food position a fixed function of the head instead.
+
+The argument confuses the model with the way it is read. A language model does not predict one
+answer; it gives odds for the next character. If food is equally likely in each free cell, the
+right odds are well defined. Writing the frame cell by cell, when $k$ free cells remain and no
+food has been written yet, the chance that this cell holds it is $1/k$. Greedy decoding then
+never writes food until the very last free cell, which is what I saw in 2026 and took for
+failure.
+
+```{python}
+#| echo: false
+#| fig-cap: "Left: the chance the model gives to food at a free cell, against 1/k. Right: where the food lands, among the free cells, when frames are sampled from the model."
+food = RUNS.get("arrows-random-food")
+if food:
+    fig, (ax, bx) = plt.subplots(1, 2, figsize=(7.4, 3.6))
+    pts = food["hazard"]["points"]
+    lo = min(min(p["ideal"], p["model"]) for p in pts) * 0.7
+    ax.plot([lo, 1], [lo, 1], "--", color=INK, lw=0.8)
+    ax.plot([p["ideal"] for p in pts], [p["model"] for p in pts], "s", color=INK, ms=4)
+    ax.set_xscale("log"); ax.set_yscale("log")
+    ax.set_xlabel("Right answer, 1/k"); ax.set_ylabel("Model")
+    tenths = food["samples"]["tenths"]
+    bx.bar(range(10), tenths, color=INK, width=0.7)
+    bx.set_xticks(range(10), [f"{10 * i}" for i in range(10)])
+    bx.set_xlabel("Rank of the food cell among free cells, %"); bx.set_ylabel("Sampled frames")
+    plt.tight_layout()
+    plt.show()
+```
+
+```{python}
+#| echo: false
+if food:
+    s = food["samples"]
+    display(Markdown(
+        f"Trained on random food, the same network follows the $1/k$ rule closely over "
+        f"{food['hazard']['meals']} meals. When whole frames are written by drawing each character from "
+        f"the model's odds instead of taking the likeliest, {s['right']} of {s['n']} are legal frames "
+        f"with exactly one food, the right snake and nothing else changed "
+        f"({pct(s['share'], 0)}, 95% interval {pct(s['lo'], 0)} to {pct(s['hi'], 0)})."))
+```
+
+So randomness can be learned, by the model I already had. What has to change is the decoding:
+sample where the game is random. Sampling everywhere has a cost, since every one of the other
+255 cells is also drawn at random and a small chance of a wrong character is sometimes taken.
+
+## Two corrections to the published record
+
+- The README describes 4 layers, 8 heads, width 128 and 0.93 million parameters. The
+  checkpoint on Hugging Face has `{python} O['layers']` layers, `{python} O['heads']` heads,
+  width `{python} O['width']` and `{python} f"{O['params']:,}"` parameters.
+- The checkpoint file is 163 MB. The weights need about 11 MB. The rest is 36 copies of the
+  1,024 by 1,024 attention mask, one per head, saved with the weights. Stored as 16-bit
+  numbers without the masks the model is 5.7 MB; the measurements in this report are made on
+  that version, which is the one the page runs.
+
+## Limits
+
+- One board size, one player. All games are played by a simple food-seeking player. People
+  play differently, and a model polished on my games may do better on my games than on these.
+- One training run per setting. Differences of a point or two between runs are within what a
+  different seed could produce; the conclusions drawn here rest on larger gaps.
+- The retrained networks were trained for 20,000 steps on a laptop. The comparison of training
+  recipes is at that budget.
+- The history of the published checkpoint was not recorded, so the Shadow Mode experiment
+  shows what the loop does from the published state, not how that state was reached.
+- An error-free game of any length remains out of reach for every model here.
+
+## Reproducing this
+
+```bash
+uv sync
+uv run pytest                              # rules, encodings, model, parity
+uv run snakeformer train arrows-aligned    # about an hour on an M3 laptop, alone
+uv run snakeformer aggregate arrows-aligned
+uv run snakeformer polish original --mortal
+uv run snakeformer build                   # weights, fixtures and experiments.json
+npm test                                   # the browser model against PyTorch
+quarto render report/index.qmd
+```
+
+The published checkpoint is downloaded from Hugging Face into `model/weights/` by the terminal
+game (`python play.py`), as before.
+
+## References
+
+::: {#refs}
+:::

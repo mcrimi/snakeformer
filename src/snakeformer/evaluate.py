@@ -89,21 +89,30 @@ def generated(model, enc: Encoding, prompts: list[str], limit: int = 276, batch:
     return out
 
 
-def games(n: int, seed: int, slack: float = 0.05, max_steps: int = 400):
+def games(n: int, seed: int, slack: float = 0.05, max_steps: int = 400, mortal: bool = False):
     """Games played by a food-seeking player that never reverses: lists of
-    (state, action, next state). The last move of a game may be a death."""
+    (state, action, next state). The last move of a game may be a death.
+
+    The player is careful, and dies only when boxed in. With mortal=True each
+    game also has an appointed turn, after which the player takes the first
+    chance to run into a wall or into itself, as a person's game ends."""
     import random
 
     from .engine import ACTIONS, is_reversal, start, step
 
     rng = random.Random(seed)
     out = []
+    fate = random.Random(seed + 1)
     for _ in range(n):
         state, moves = start(), []
-        for _ in range(max_steps):
+        doom = fate.randint(10, max_steps - 1) if mortal else max_steps
+        for turn in range(max_steps):
             options = [a for a in ACTIONS if not is_reversal(state, a)]
             alive = [a for a in options if step(state, a)[0] is not None]
-            if alive and rng.random() >= slack:
+            fatal = [a for a in options if a not in alive]
+            if turn >= doom and fatal:
+                action = fate.choice(fatal)
+            elif alive and rng.random() >= slack:
                 food = state.food or state.head
                 heads = {a: step(state, a)[0].head for a in alive}
                 action = min(alive, key=lambda a, h=heads, f=food: abs(h[a][0] - f[0])

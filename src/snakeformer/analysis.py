@@ -87,6 +87,19 @@ def ambiguity(n: int = 20_000, seed: int = 11) -> list[dict]:
     return [{"length": bucket(lo), **share(tally[bucket(lo)])} for lo, _ in BUCKETS if bucket(lo) in tally]
 
 
+def two_readings(n: int = 1000, seed: int = 31, exclude: set | None = None) -> list[Example]:
+    """Ordinary moves whose H/O/# picture has two readings: the positions on
+    which the two encodings can be told apart."""
+    out: list[Example] = []
+    seen = set(exclude or ())
+    while len(out) < n:
+        batch = generate(20_000, seed=seed, exclude=seen)
+        seen |= {(e.state, e.action) for e in batch}
+        out += [e for e in batch if e.ambiguous]
+        seed += 1
+    return out[:n]
+
+
 def in_play(model, enc: Encoding, played) -> dict:
     """Frames from whole games played by the rules. While every frame so far
     is right, the model's game and the real one are the same game, so the
@@ -101,7 +114,11 @@ def in_play(model, enc: Encoding, played) -> dict:
     longest = max(len(m) for m in played)
     alive = [sum(1 for f in first if f is None or f > t) / len(played) for t in range(longest + 1)]
     clean = sum(f is None for f in first)
+    events = defaultdict(list)
+    for ex, good in zip(flat, right, strict=True):
+        events["death" if ex.next is None else "eat" if len(ex.next) > len(ex.state) else "move"].append(good)
     return {"frames": share(right), "games": len(played), "clean_games": clean,
+            "events": {k: share(v) for k, v in events.items()},
             "first_error": first, "alive": alive,
             "median_first_error": sorted(f or 10**9 for f in first)[len(first) // 2]}
 
@@ -168,18 +185,21 @@ def food_samples(model, enc: Encoding, n: int = 300, seed: int = 22) -> dict:
             "tenths": tenths}
 
 
-def measure(model, enc: Encoding, test, played, name: str) -> dict:
+def measure(model, enc: Encoding, test, played, name: str, twins=()) -> dict:
     model = rounded(model).to(device())  # as shipped to the browser
     out = {"name": name, "encoding": enc.name, "params": model.n_params(),
            "layers": model.config.n_layer, "width": model.config.n_embd, "heads": model.config.n_head,
            "stress": stress(model, enc, test), "play": in_play(model, enc, played)}
+    if twins:
+        out["two_readings"] = share(exact(model, twins, enc))
     model.cpu()
     return out
 
 
 def build(root=".", out="web/data/experiments.json", n_games: int = 200) -> dict:
     root = Path(root)
-    _, test = datasets()
+    training, test = datasets()
+    twins = two_readings(exclude={(e.state, e.action) for e in training})
     played = games(n_games, seed=7)
     lengths = [len(s) for moves in played for s, _, _ in moves]
     result = {"test_n": len(test), "games": {"n": n_games, "frames": len(lengths),
@@ -188,7 +208,7 @@ def build(root=".", out="web/data/experiments.json", n_games: int = 200) -> dict
               "ambiguity": ambiguity(), "models": {}, "runs": {}}
     original = published(root)
     if original is not None:
-        result["models"]["original"] = measure(original, FRAME, test, played, "original")
+        result["models"]["original"] = measure(original, FRAME, test, played, "original", twins)
     for name, (enc_name, mode, food) in RUNS.items():
         folder = root / "runs" / name
         if not (folder / "model.pt").exists():
@@ -209,8 +229,22 @@ def build(root=".", out="web/data/experiments.json", n_games: int = 200) -> dict
             entry["samples"] = food_samples(model, enc)
             model.cpu()
         else:
-            result["models"][name] = measure(model, enc, test, played, name)
+            result["models"][name] = measure(model, enc, test, played, name, twins)
         result["runs"][name] = entry
+    result["aggregate"] = {}
+    for log_file in sorted((root / "runs").glob("*-aggregated/log.json")):
+        log = json.loads(log_file.read_text())
+        if "log" not in log:
+            continue
+        name = log_file.parent.name
+        result["aggregate"][name] = log
+        model, extra = load(log_file.parent / "model.pt")
+        result["models"][name] = measure(model, ENCODINGS[extra["encoding"]], test, played, name, twins)
+    result["polish"] = {}
+    for log_file in sorted((root / "runs").glob("*-polished*/log.json")):
+        log = json.loads(log_file.read_text())
+        if "log" in log:
+            result["polish"][log_file.parent.name] = log
     extra = root / "runs" / "published-context.json"
     if extra.exists():
         result["context"] = json.loads(extra.read_text())

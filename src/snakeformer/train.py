@@ -43,10 +43,11 @@ def tensors(examples, enc: Encoding):
 
 def train(examples, enc: Encoding, steps: int, mode: str = "aligned", batch: int = 64,
           lr: float = 1e-3, seed: int = 0, config: Config | None = None, log=None,
-          every: int = 1000, on_eval=None) -> GPT:
+          every: int = 1000, on_eval=None, start: GPT | None = None) -> GPT:
+    """`start` continues from an existing model instead of a new one."""
     torch.manual_seed(seed)
     dev = device()
-    model = GPT(config or Config(vocab_size=len(enc.chars))).to(dev)
+    model = (start or GPT(config or Config(vocab_size=len(enc.chars)))).to(dev).train()
     opt = torch.optim.AdamW(model.parameters(), lr=lr)
     sched = torch.optim.lr_scheduler.OneCycleLR(opt, max_lr=lr, total_steps=steps, pct_start=0.05)
     gen = torch.Generator().manual_seed(seed)

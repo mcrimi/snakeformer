@@ -1,0 +1,22 @@
+cff-version: 1.2.0
+message: "If you use this code, please cite it."
+title: "Snakeformer: a transformer trained from scratch to be the game of Snake"
+authors:
+  - family-names: Crimi
+    given-names: Mariano
+version: 2.0.0
+date-released: 2026-11-20
+url: "https://marianocrimi.com/snakeformer/"
+repository-code: "https://github.com/mcrimi/snakeformer"
+references:
+  - type: conference-paper
+    title: "A Reduction of Imitation Learning and Structured Prediction to No-Regret Online Learning"
+    authors:
+      - family-names: Ross
+        given-names: Stéphane
+      - family-names: Gordon
+        given-names: Geoffrey J.
+      - family-names: Bagnell
+        given-names: J. Andrew
+    collection-title: "Proceedings of the Fourteenth International Conference on Artificial Intelligence and Statistics"
+    year: 2011

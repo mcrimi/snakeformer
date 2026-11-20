@@ -40,9 +40,11 @@ def first_slips(model, enc: Encoding, moves, batch: int = 128):
     return out
 
 
-def correct(model, opt, enc: Encoding, move, attempts: int = 10, weight: float = 50.0) -> int:
+def correct(model, opt, enc: Encoding, move, attempts: int = 10, weight: float = 50.0,
+            norms: list | None = None) -> int:
     """Train on one move until its frame is right or the attempts run out.
-    Returns the number of gradient steps taken."""
+    Returns the number of gradient steps taken. `norms` collects, per step,
+    (whether the mistake was weighted, the gradient's size before clipping)."""
     dev = next(model.parameters()).device
     state, action, nxt = move
     seq = torch.tensor([enc.encode(enc.prompt(state, action) + enc.target(nxt)[:-1])], device=dev)
@@ -59,7 +61,9 @@ def correct(model, opt, enc: Encoding, move, attempts: int = 10, weight: float =
         loss = scale * F.cross_entropy(logits[None], seq[:, at])
         opt.zero_grad(set_to_none=True)
         loss.backward()
-        torch.nn.utils.clip_grad_norm_(model.parameters(), 0.5)
+        size = torch.nn.utils.clip_grad_norm_(model.parameters(), 0.5)
+        if norms is not None:
+            norms.append((scale > 1.0, float(size)))
         opt.step()
         model.eval()
         steps += 1
@@ -67,7 +71,7 @@ def correct(model, opt, enc: Encoding, move, attempts: int = 10, weight: float =
 
 
 def polish(model, enc: Encoding, n_games: int, seed: int = 100, lr: float = 1e-4,
-           every: int = 10, on_eval=None, log=None):
+           every: int = 10, on_eval=None, log=None, mortal: bool = False, norms: list | None = None):
     """Play n_games with corrections switched on. `on_eval(model)` is called
     before the first game and after every `every` games."""
     opt = torch.optim.AdamW(model.parameters(), lr=lr)
@@ -83,7 +87,7 @@ def polish(model, enc: Encoding, n_games: int, seed: int = 100, lr: float = 1e-4
         print(row, flush=True)
 
     note(0)
-    for g, moves in enumerate(games(n_games, seed=seed), 1):
+    for g, moves in enumerate(games(n_games, seed=seed, mortal=mortal), 1):
         start = 0
         while start < len(moves):
             slips = first_slips(model, enc, moves[start:])
@@ -91,7 +95,7 @@ def polish(model, enc: Encoding, n_games: int, seed: int = 100, lr: float = 1e-4
             if wrong is None:
                 break
             total_slips += 1
-            total_steps += correct(model, opt, enc, moves[start + wrong])
+            total_steps += correct(model, opt, enc, moves[start + wrong], norms=norms)
             start += wrong + 1
         if g % every == 0 or g == n_games:
             note(g)

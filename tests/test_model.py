@@ -158,3 +158,30 @@ def test_a_correction_fixes_the_frame_it_is_given():
     assert 0 < steps < 3000 and first_slips(model, ARROWS, [moves[wrong]]) == [None]
     right = exact(model, examples, ARROWS)
     assert [s is None for s in first_slips(model, ARROWS, moves)] == right
+
+
+def test_mortal_games_end_in_a_death_and_leave_the_careful_games_alone():
+    assert games(3, seed=4, max_steps=60) == games(3, seed=4, max_steps=60, mortal=False)
+    played = games(8, seed=4, max_steps=200, mortal=True)
+    assert sum(moves[-1][2] is None for moves in played) >= 6
+    for moves in played:
+        for state, action, nxt in moves:
+            assert step(state, action)[0] == nxt
+
+
+def test_training_can_continue_from_a_model(tiny):
+    examples = generate(64, seed=5, check=False)
+    before = {k: v.clone() for k, v in tiny.state_dict().items()}
+    after = train(examples, ARROWS, 2, batch=8, start=tiny)
+    assert after is tiny
+    assert any(not torch.equal(v.cpu(), before[k].cpu()) for k, v in after.state_dict().items())
+    tiny.cpu()
+
+
+def test_two_reading_positions_are_ambiguous_ordinary_moves():
+    from snakeformer.ambiguity import is_ambiguous
+    from snakeformer.analysis import two_readings
+
+    found = two_readings(n=5)
+    assert len(found) == 5
+    assert all(e.kind == "move" and is_ambiguous(e.state) for e in found)

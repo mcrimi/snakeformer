@@ -103,7 +103,11 @@ def generate(n: int, seed: int, max_len: int | None = None, min_len: int = 0,
     rng = random.Random(seed)
     seen = set(exclude or ())
     out: list[Example] = []
-    chooser = (lambda snake: rng.choice(free_cells(snake))) if food_at == "random" else food_at
+    chooser = food_at
+    if food_at == "random":
+        def chooser(snake):
+            free = free_cells(snake)
+            return rng.choice(free) if free else None
     while len(out) < n:
         for state in wander(rng, chooser):
             if not (min_len <= len(state) and (max_len is None or len(state) <= max_len)):

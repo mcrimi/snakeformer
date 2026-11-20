@@ -2,6 +2,7 @@
 
     snakeformer train <run>     train one of the named runs (hours on a laptop)
     snakeformer polish <source> correct a model on its own mistakes during play
+    snakeformer aggregate <source>  collect its mistakes over many games, then retrain
     snakeformer build           measure every model on disk and write the page's data
     snakeformer fixtures        re-export the JavaScript test cases from the shipped weights
 """
@@ -16,10 +17,12 @@ from .experiments import RUNS, STEPS, TRAIN_N
 
 # Models the page offers: id -> (run, label, note). "original" is the published checkpoint.
 SHIPPED = {
-    "arrows": ("arrows-aligned", "Retrained, arrows",
-               "Trained for this page: 4 layers, 0.9M parameters. Each body segment points to the next."),
+    "arrows": ("arrows-aligned-aggregated", "Retrained",
+               "Trained for this page, then retrained on its own mistakes: 4 layers, 0.9M parameters. "
+               "Each body segment points to the next."),
     "original": (None, "Published, 2026",
-                 "The checkpoint on Hugging Face: 6 layers, 2.9M parameters, boards drawn with H, O and #."),
+                 "The checkpoint on Hugging Face: 6 layers, 2.9M parameters, boards drawn with H, O and #. "
+                 "About three times slower here."),
 }
 
 
@@ -79,6 +82,10 @@ def main(argv=None) -> None:
     p = sub.add_parser("polish", help="shadow-mode corrections over many games")
     p.add_argument("source", help='"original" or the name of a finished run')
     p.add_argument("--games", type=int, default=300)
+    p.add_argument("--mortal", action="store_true", help="games end in a death, as a person's do")
+    a = sub.add_parser("aggregate", help="collect mistakes over many games, then retrain (DAgger)")
+    a.add_argument("source", help='"original" or the name of a finished run')
+    a.add_argument("--rounds", type=int, default=3)
     sub.add_parser("build", help="measure the models and write web/data")
     sub.add_parser("fixtures", help="re-export the JavaScript test cases")
     args = parser.parse_args(argv)
@@ -90,7 +97,11 @@ def main(argv=None) -> None:
     elif args.command == "polish":
         from .experiments import polish_run
 
-        print(polish_run(args.source, n_games=args.games)["log"][-1])
+        print(polish_run(args.source, n_games=args.games, mortal=args.mortal)["log"][-1])
+    elif args.command == "aggregate":
+        from .experiments import aggregate_run
+
+        print(aggregate_run(args.source, rounds=args.rounds)["log"][-1])
     elif args.command == "build":
         build()
     else:

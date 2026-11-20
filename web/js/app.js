@@ -4,7 +4,7 @@ import { board, cells, start } from "./game.js";
 import { Model, parseWeights } from "./model.js";
 import { PROMPT_LENGTH, Turn, autopilot, heading, isReversal } from "./play.js";
 import { cellAt, drawBoard } from "./view.js";
-import { renderFindings } from "./findings.js";
+import { loadFindings, renderFindings } from "./findings.js";
 
 const $ = (id) => document.getElementById(id);
 const KEYS = { ArrowUp: "U", ArrowDown: "D", ArrowLeft: "L", ArrowRight: "R", w: "U", s: "D", a: "L", d: "R", W: "U", S: "D", A: "L", D: "R" };
@@ -320,6 +320,7 @@ async function init() {
   draw();
   requestAnimationFrame(frame);
   renderFindings();
+  loadFindings();
   try {
     game.list = await (await fetch("data/models.json")).json();
   } catch (e) {

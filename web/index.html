@@ -36,7 +36,7 @@
     <nav class="nav" aria-label="On this page">
       <a href="#play">Play</a>
       <a href="#looks">Attention</a>
-      <a href="#idea">The flaw</a>
+      <a href="#idea">The tail</a>
       <a href="#findings">Findings</a>
       <a href="#method">Method</a>
     </nav>
@@ -151,7 +151,148 @@
     <p class="fine">Square size is the share of attention, averaged over the heads of a layer; with “All”, the largest value over the layers. Outlines mark the snake and the food. Attention shows what the model read, which is not the same as why it answered as it did.</p>
   </section>
 
+  <section id="idea" aria-labelledby="idea-h">
+    <h2 id="idea-h">One picture, two snakes</h2>
+    <div class="prose">
+      <p>The model gets one frame and one move. Nothing else. So everything it needs to know must be in the frame. In 2026 I learned this the hard way: without a separate character for the tail, the model could not know which end of the snake to erase, and the snake grew for ever. Marking the tail with <code>#</code> fixed it.</p>
+      <p>Rebuilding the project, I found the fix was not complete. The body is drawn with one character, <code>O</code>, which does not say which way the snake runs. When the tail touches two body cells, the picture cannot say which of them comes next, and that cell is the tail of the next frame. Below are two different snakes that draw exactly the same picture. Move both one step to the right and the pictures differ.</p>
+    </div>
+    <div class="twins">
+      <figure class="plate">
+        <canvas id="twin-a" aria-label="Snake A, drawn with arrows"></canvas>
+        <figcaption class="cap">Snake A. Each segment points to the next one, towards the head.</figcaption>
+      </figure>
+      <figure class="plate">
+        <canvas id="twin-picture" aria-label="The picture both snakes make with H, O and #"></canvas>
+        <figcaption class="cap">What the 2026 model sees for both.</figcaption>
+      </figure>
+      <figure class="plate">
+        <canvas id="twin-b" aria-label="Snake B, drawn with arrows"></canvas>
+        <figcaption class="cap">Snake B. Same cells, another path through them.</figcaption>
+      </figure>
+    </div>
+    <div class="twins">
+      <figure class="plate">
+        <canvas id="twin-a-next" aria-label="Snake A one move later"></canvas>
+        <figcaption class="cap">A, one move to the right.</figcaption>
+      </figure>
+      <div></div>
+      <figure class="plate">
+        <canvas id="twin-b-next" aria-label="Snake B one move later"></canvas>
+        <figcaption class="cap">B, one move to the right. The tail is somewhere else.</figcaption>
+      </figure>
+    </div>
+    <div class="prose">
+      <p>How often does it happen? Never for a short snake, and more and more as it grows and coils. Over a set of positions weighted towards long snakes, <span data-fill="ambiguous">about 3%</span> of ordinary moves have a picture with two readings.</p>
+    </div>
+    <figure class="chart">
+      <svg id="amb-chart" role="img" aria-labelledby="amb-cap"></svg>
+      <figcaption class="cap" id="amb-cap">Share of ordinary moves whose H, O, # picture fits two different snakes, by snake length. Thin bars: 95% intervals. No model is involved; this is a property of the drawing.</figcaption>
+    </figure>
+    <div class="prose">
+      <p>The repair is to draw the body with arrows, each segment pointing to the next. Then one frame holds the whole snake and the question has one answer. The retrained model on this page reads and writes boards that way, which is why its text looks different from the 2026 one.</p>
+      <p id="twins-verdict">Does it matter in practice? Less than I expected. I trained the same small network twice, once with each drawing, and tested both on 1,000 positions that have two readings.</p>
+    </div>
+    <div class="table-wrap">
+      <table id="twins-table" class="data"></table>
+    </div>
+  </section>
 
+  <section id="findings" aria-labelledby="findings-h">
+    <h2 id="findings-h">What I found</h2>
+    <div class="prose">
+      <p>In 2026 I judged the model by playing it. It felt right, and I published it. This time I measured it, against the real rules, on <span data-fill="games">200</span> whole games (<span data-fill="frames">75,840</span> frames) and on <span data-fill="test">6,000</span> positions chosen to be hard: long snakes, meals, collisions. A frame counts as right only if every one of its 256 cells is right.</p>
+    </div>
+
+    <h3>1. Ninety-eight per cent right is a short game</h3>
+    <div class="prose">
+      <p>The published model writes <span data-fill="original.play">98.3%</span> of frames exactly right in ordinary play. That sounds like a finished game. It is not, because a game is hundreds of frames and one wrong frame is enough to leave the real game behind. Half of the games had gone wrong by turn <span data-fill="original.median">156</span>, and only <span data-fill="original.clean">10</span> of <span data-fill="games">200</span> were still right after 400 turns.</p>
+    </div>
+    <figure class="chart">
+      <svg id="alive-chart" role="img" aria-labelledby="alive-cap"></svg>
+      <figcaption class="cap" id="alive-cap">Share of games in which every frame so far is right, by turn. <span data-fill="games">200</span> games played by a simple food-seeking player, 400 turns each at most.</figcaption>
+    </figure>
+    <div class="prose">
+      <p>This is the difference between a model of a game and a game. The rules are right every time. A model that is right 98 times in 100 is a different game after a minute, and in the play above you can watch the moment it happens.</p>
+    </div>
+
+    <h3>2. A model is good where its data was</h3>
+    <div class="prose">
+      <p>The published model is strong in ordinary play and weak away from it: <span data-fill="original.stress">82%</span> on the hard positions. Asked to turn straight back into its own neck, it gets <span data-fill="original.reversal">19%</span> right. It never had to learn that, because the terminal game refuses the key before the model sees it.</p>
+      <p>For this page I trained a network a third of the size on positions built to cover the hard cases. It reaches <span data-fill="arrows-aligned.stress">98%</span> on the hard positions, and then does worse than the published model where it counts, in ordinary play: <span data-fill="arrows-aligned.play">95%</span>. My hard positions had too few plain games in them. Neither model learned the rules. Each learned the positions it was shown.</p>
+    </div>
+    <div class="table-wrap">
+      <table id="kinds-table" class="data"><caption class="cap">Frames exactly right, by kind of position. The last row is ordinary play; the others are the hard positions, none of them seen in training by the retrained models.</caption></table>
+    </div>
+
+    <h3>3. Learning from its own mistakes: two ways, one works</h3>
+    <div class="prose">
+      <p>The part of the 2026 project I liked most was Shadow Mode: the real rules run beside the model, and when the model slips you press a key and it takes a training step on that one mistake. Mistakes that touch the head, the food or a death count fifty times. The published model had been through some of this by hand. Here I let it run unattended for 300 games, each ending in a death, and measured the model every 30 games on games and positions it was not being corrected on.</p>
+    </div>
+    <figure class="chart">
+      <svg id="polish-play" role="img" aria-labelledby="polish-cap"></svg>
+      <figcaption class="cap" id="polish-cap">Frames right in 60 held-out games while the model is corrected one mistake at a time. “No deaths”: the same loop with a careful player that almost never dies.</figcaption>
+    </figure>
+    <div class="prose">
+      <p>It does not settle. Each correction fixes the frame in front of it and moves everything else a little. The published model ends slightly better in play than it started, after dipping well below on the way. The retrained model ends worse on both counts. With a player that never dies the loop teaches the model that nobody dies: frames in play rise to <span data-fill="original-polished.play.after">99.4%</span> while deaths at a wall fall from <span data-fill="original-polished.wall.before">97%</span> right to <span data-fill="original-polished.wall.after">14%</span>.</p>
+      <p>The fifty-fold weight turns out to do nothing. The step is cut to a fixed length before it is applied, and every one of the <span data-fill="original-polished-mortal.grad.steps">1,014</span> steps was long enough to be cut: a typical unweighted mistake was <span data-fill="original-polished-mortal.grad.plain">28</span> on a scale where the limit is 0.5, a weighted one <span data-fill="original-polished-mortal.grad.weighted">3,022</span>. After the cut they are the same size.</p>
+      <p>The other way is in the 2026 code as well, as the data option I called DAgger: let the model shadow many games, keep every frame it gets wrong, then train on them. I mixed the mistakes half and half with the positions the model first learned from, so that it rehearses what it knew while it fixes what it did not. Three rounds of that took the retrained model from <span data-fill="arrows-aligned.play">95%</span> to <span data-fill="arrows-aligned-aggregated.play">99%</span> in play and kept what it knew about hard positions. Each round found fewer new mistakes: <span data-fill="arrows-aligned-aggregated.first">2,493</span> in the first, <span data-fill="arrows-aligned-aggregated.last">404</span> in the third. That model is the default at the top of this page.</p>
+    </div>
+    <div class="table-wrap">
+      <table id="learn-table" class="data"><caption class="cap">Before → after, measured on 60 games and 6,000 hard positions that neither method trained on. “One at a time” is Shadow Mode left running; “collect, then retrain” is three rounds of 600 games.</caption></table>
+    </div>
+
+    <h3>4. How it is trained matters more than how the board is drawn</h3>
+    <div class="prose" id="recipe-prose">
+      <p>The 2026 training joined all the examples into one long text, cut windows from it at random places, and scored every character. Half of what it scored is the input board and the move, which the model is never asked to produce, and a window could begin anywhere inside an example. The retraining gives the model one example at a time, always in the same place, and scores only the frame it is asked to write.</p>
+    </div>
+    <figure class="chart">
+      <svg id="curve-chart" role="img" aria-labelledby="curve-cap"></svg>
+      <figcaption class="cap" id="curve-cap">Hard positions exactly right during training. Same network, same positions, about the same number of characters read per step.</figcaption>
+    </figure>
+
+    <h3>5. Can randomness be learned?</h3>
+    <div class="prose" id="food-prose">
+      <p>In 2026 I gave up on food that appears at random and made its position a fixed function of the head, writing that a model trained to predict the next character cannot learn a random outcome. I tested that. I trained the same network on games with random food and asked it, after each meal, how likely food is at each free cell as it writes the frame.</p>
+    </div>
+    <div class="pair">
+      <figure class="chart">
+        <svg id="hazard-chart" role="img" aria-labelledby="hazard-cap"></svg>
+        <figcaption class="cap" id="hazard-cap">The chance the model gives to food at a free cell, against the right answer. Writing cell by cell, if k free cells remain and no food has appeared, the right chance is 1 in k.</figcaption>
+      </figure>
+      <figure class="chart">
+        <svg id="tenths-chart" role="img" aria-labelledby="tenths-cap"></svg>
+        <figcaption class="cap" id="tenths-cap">Frames written by drawing each character at random from the model’s own odds. Where the food landed among the free cells, in tenths. Even bars mean every cell is as likely as any other.</figcaption>
+      </figure>
+    </div>
+
+    <h3>6. Two corrections to what I published</h3>
+    <div class="prose">
+      <p>The README described a model of 4 layers, 8 heads and 0.93 million parameters. The checkpoint on Hugging Face has 6 layers, 6 heads and <span data-fill="original.params">2.87M</span> parameters; I must have published a later, larger one and not updated the text. And the file is 163 MB for a model that needs 11: the rest is 36 copies of the attention mask, one per head, a block of ones and zeros saved along with the weights. Stored as 16-bit numbers the model is 5.7 MB, gives the same answers, and is what your browser downloaded.</p>
+    </div>
+  </section>
+
+  <section id="method" aria-labelledby="method-h">
+    <h2 id="method-h">How it was built</h2>
+    <div class="prose">
+      <p>The 2026 project was a terminal game with the model inside it. The rules now live in a small tested module that plays move for move like the terminal game. Around it are two ways to draw a board, a trainer, the two ways of learning from mistakes, and the measurements above, each a command you can run again.</p>
+      <p>The model on this page is not a recording and there is no server. The network is a few hundred lines of JavaScript, the weights are a file of 16-bit numbers, and each character is computed on your device as you watch. A test feeds the same boards to PyTorch and to the JavaScript and requires the same characters and the same attention.</p>
+    </div>
+<pre class="flow" aria-label="Pipeline">engine.py ── the rules of Snake, without the terminal
+ ├─ encoding.py      a board as text: H O #, or arrows
+ ├─ train.py         one example per sequence, or the 2026 stream
+ ├─ online.py        Shadow Mode: one mistake, one step
+ ├─ experiments.py   the runs; collect mistakes, then retrain
+ ├─ analysis.py      experiments.json ──→ charts on this page
+ └─ export.py        weights as 16-bit ──→ the model you played
+model.js, game.js ── the same network and rules in the browser</pre>
+    <ul class="links">
+      <li><a href="report/">Read the full analysis</a><span>every measurement, with the code that made it</span></li>
+      <li><a href="https://github.com/mcrimi/snakeformer" rel="noopener">Source on GitHub</a><span>Python package, tests, this page and the terminal game</span></li>
+      <li><a href="https://huggingface.co/mcrimi/snakeformer" rel="noopener">The 2026 checkpoint</a><span>on Hugging Face, as published</span></li>
+    </ul>
+    <p class="fine">Built by <a href="/">Mariano Crimi</a>. All figures are for a 16 by 16 board and for games played by a simple food-seeking player, not by people. The retrained models were trained for 20,000 steps on a laptop; longer training would move the numbers.</p>
+  </section>
 </main>
 </body>
 </html>
