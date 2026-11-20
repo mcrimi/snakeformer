@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Snakeformer · Mariano Crimi</title>
+<meta name="description" content="A small transformer that plays the part of the game Snake: it reads the board as text and writes the next frame. It runs in your browser, with the real rules checking every frame.">
+<link rel="canonical" href="https://marianocrimi.com/snakeformer/">
+<meta property="og:title" content="Snakeformer">
+<meta property="og:description" content="A transformer that is the game engine. Play Snake as a language model writes it, one character at a time.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://marianocrimi.com/snakeformer/">
+<meta property="og:image" content="https://marianocrimi.com/assets/img/og.png">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' fill='%231B1B19'/%3E%3Cpath d='M3.5 12V4l4.5 5 4.5-5v8' fill='none' stroke='%23ECEBE6' stroke-width='1.6'/%3E%3C/svg%3E">
+<script>
+  // Follow the reading settings chosen on marianocrimi.com (same storage key).
+  (function () {
+    var s = {};
+    try { s = JSON.parse(localStorage.getItem("mcrimi-site") || "{}") || {}; } catch (e) {}
+    var root = document.documentElement;
+    root.dataset.theme = s.paper === "night" ? "dark" : "light";
+    if (s.paper === "grey") root.dataset.paper = "grey";
+    root.dataset.font = s.font === "garamond" || s.font === "charter" ? s.font : "literata";
+    if (s.size === "s" || s.size === "l") root.dataset.size = s.size;
+  })();
+</script>
+<link rel="stylesheet" href="snakeformer.css">
+<script type="module" src="js/app.js"></script>
+<script src="/assets/moon-margin.js" defer data-slug="self-awareness-i" data-title="Self-awareness I" data-year="2020" data-mode="margin" data-focus="0.5,0.45"
+  data-alt="A figure in black bends over a round basin and meets its own face looking back from the dark water"></script>
+</head>
+<body>
+<header class="topbar">
+  <div class="in gut">
+    <a class="mark" href="/#portfolio" aria-label="Back to the experiments on marianocrimi.com">← Experiments</a>
+    <nav class="nav" aria-label="On this page">
+      <a href="#play">Play</a>
+      <a href="#looks">Attention</a>
+      <a href="#idea">The flaw</a>
+      <a href="#findings">Findings</a>
+      <a href="#method">Method</a>
+    </nav>
+    <div class="status">
+      <button class="aa" id="aa" type="button" aria-expanded="false" aria-controls="panel" aria-label="Paper settings">Aa</button>
+    </div>
+    <div class="panel" id="panel" hidden>
+      <div class="grp">
+        <span class="label">Paper</span>
+        <div class="seg" role="group" aria-label="Paper">
+          <button type="button" data-paper="warm">Warm</button>
+          <button type="button" data-paper="grey">Grey</button>
+          <button type="button" data-paper="night">Night</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</header>
+
+<main class="wrap gut">
+
+  <section id="play" aria-labelledby="play-h">
+    <p class="label">Projects · 2026</p>
+    <h1 id="play-h">Snakeformer</h1>
+    <p class="dek">There is no game here. A small language model reads the board as text, reads your move, and writes the next board one character at a time. The real rules run alongside and mark every cell it gets wrong.</p>
+
+    <div class="sim">
+      <div class="controls">
+        <div class="field">
+          <span class="label" id="model-l">Model</span>
+          <div class="presets" id="models" role="group" aria-labelledby="model-l"></div>
+          <p class="fine" id="model-note"></p>
+        </div>
+        <div class="field">
+          <span class="label" id="wrong-l">When the model is wrong</span>
+          <div class="seg" role="group" aria-labelledby="wrong-l">
+            <button type="button" data-follow="model" aria-pressed="true">Believe it</button>
+            <button type="button" data-follow="rules" aria-pressed="false">Correct it</button>
+          </div>
+        </div>
+        <div class="field">
+          <span class="label" id="speed-l">Writing speed</span>
+          <div class="seg" role="group" aria-labelledby="speed-l">
+            <button type="button" data-speed="1" aria-pressed="false">Slow</button>
+            <button type="button" data-speed="6" aria-pressed="true">Steady</button>
+            <button type="button" data-speed="0" aria-pressed="false">Flat out</button>
+          </div>
+        </div>
+        <div class="buttons">
+          <button class="btn primary" id="go" type="button" disabled>Loading the model…</button>
+          <button class="btn" id="again" type="button">New game</button>
+        </div>
+        <div class="field">
+          <span class="label">Steer</span>
+          <div class="pad" id="pad">
+            <button type="button" data-key="U" aria-label="Up">↑</button>
+            <button type="button" data-key="L" aria-label="Left">←</button>
+            <button type="button" data-key="D" aria-label="Down">↓</button>
+            <button type="button" data-key="R" aria-label="Right">→</button>
+          </div>
+          <p class="fine" id="pilot">Arrow keys or W A S D. Until you steer, a simple autopilot heads for the food.</p>
+        </div>
+      </div>
+
+      <div>
+        <div class="boards">
+          <figure class="plate">
+            <canvas class="board" id="board" aria-label="The board as the model writes it"></canvas>
+            <figcaption class="cap">The frame as the model writes it. Grey: the frame before, not yet overwritten. Boxed and struck through: cells where the rules say otherwise.</figcaption>
+          </figure>
+          <figure class="plate">
+            <pre class="tape" id="tape" aria-label="The text the model is writing"></pre>
+            <figcaption class="cap">The same thing as the model sees it: characters. <span id="tape-note"></span></figcaption>
+          </figure>
+        </div>
+        <dl class="readout" aria-live="off">
+          <div><dt class="label">Turn</dt><dd id="r-turn">0</dd></div>
+          <div><dt class="label">Length</dt><dd id="r-length">3</dd></div>
+          <div><dt class="label">Frames right</dt><dd id="r-right">–</dd></div>
+          <div><dt class="label">First mistake</dt><dd id="r-first">–</dd></div>
+        </dl>
+        <p class="verdict" id="verdict" aria-live="polite">Loading the model.</p>
+      </div>
+    </div>
+  </section>
+
+  <section id="looks" aria-labelledby="looks-h">
+    <h2 id="looks-h">Where it looks</h2>
+    <div class="prose">
+      <p>To write one cell of the new frame the model looks back over everything before it: the old board, your move, and the part of the new frame it has already written. Point at a cell on the left to see what it consulted for that cell in the last finished turn. A cell far from the snake needs only the cell above it in the old board. The interesting ones are the head, the tail and the food.</p>
+    </div>
+    <div class="controls" style="max-width:46rem">
+      <div class="field">
+        <span class="label" id="layer-l">Layer</span>
+        <div class="seg" id="layers" role="group" aria-labelledby="layer-l"></div>
+      </div>
+    </div>
+    <div class="twins">
+      <figure class="plate">
+        <canvas class="board" id="ask" aria-label="The frame the model wrote. Point at a cell."></canvas>
+        <figcaption class="cap">The frame it wrote. Point at a cell.</figcaption>
+      </figure>
+      <figure class="plate">
+        <canvas class="board" id="att-in" aria-label="Attention over the old board"></canvas>
+        <figcaption class="cap">Where it looked in the old board. <span id="att-action"></span></figcaption>
+      </figure>
+      <figure class="plate">
+        <canvas class="board" id="att-out" aria-label="Attention over the frame written so far"></canvas>
+        <figcaption class="cap">Where it looked in what it had already written.</figcaption>
+      </figure>
+    </div>
+    <p class="fine">Square size is the share of attention, averaged over the heads of a layer; with “All”, the largest value over the layers. Outlines mark the snake and the food. Attention shows what the model read, which is not the same as why it answered as it did.</p>
+  </section>
+
+FINDINGS
+</main>
+</body>
+</html>

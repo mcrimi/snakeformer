@@ -58,3 +58,90 @@ def by_kind(examples, right) -> dict:
 
 
 assert PROMPT_LEN  # re-exported for callers that slice sequences
+
+
+@torch.no_grad()
+def generated(model, enc: Encoding, prompts: list[str], limit: int = 276, batch: int = 64):
+    """Greedy continuations, generated the way the terminal game does it: the
+    whole context is run again for every token and, once it is longer than the
+    model's window, the oldest tokens fall off the front."""
+    dev = next(model.parameters()).device
+    block, stop = model.config.block_size, enc.stoi["$"]
+    out = [""] * len(prompts)
+    order = sorted(range(len(prompts)), key=lambda i: len(prompts[i]))
+    for at in range(0, len(order), batch):
+        chunk = [i for i in order[at : at + batch]]
+        by_len = defaultdict(list)
+        for i in chunk:
+            by_len[len(prompts[i])].append(i)
+        for _, group in by_len.items():
+            ids = torch.tensor([enc.encode(prompts[i]) for i in group], device=dev)
+            start, done = ids.shape[1], torch.zeros(len(group), dtype=torch.bool, device=dev)
+            for _ in range(limit):
+                nxt = model(ids[:, -block:])[:, -1].argmax(-1)
+                ids = torch.cat([ids, nxt[:, None]], 1)
+                done |= nxt == stop
+                if done.all():
+                    break
+            for i, row in zip(group, ids[:, start:].tolist(), strict=True):
+                text = enc.decode(row)
+                out[i] = text[: text.index("$") + 1] if "$" in text else text
+    return out
+
+
+def games(n: int, seed: int, slack: float = 0.05, max_steps: int = 400):
+    """Games played by a food-seeking player that never reverses: lists of
+    (state, action, next state). The last move of a game may be a death."""
+    import random
+
+    from .engine import ACTIONS, is_reversal, start, step
+
+    rng = random.Random(seed)
+    out = []
+    for _ in range(n):
+        state, moves = start(), []
+        for _ in range(max_steps):
+            options = [a for a in ACTIONS if not is_reversal(state, a)]
+            alive = [a for a in options if step(state, a)[0] is not None]
+            if alive and rng.random() >= slack:
+                food = state.food or state.head
+                heads = {a: step(state, a)[0].head for a in alive}
+                action = min(alive, key=lambda a, h=heads, f=food: abs(h[a][0] - f[0])
+                             + abs(h[a][1] - f[1]))
+            else:
+                action = rng.choice(alive or options)
+            nxt, _ = step(state, action)
+            moves.append((state, action, nxt))
+            if nxt is None:
+                break
+            state = nxt
+        out.append(moves)
+    return out
+
+
+def in_play(model, enc: Encoding, played, context: bool, sample: int | None = None, seed: int = 0):
+    """For moves taken from real games, whether the generated frame is right.
+
+    context=True puts the previous turn in front of the prompt, as the
+    terminal game does. Returns a list of dicts with the game, the step, the
+    snake's length and whether the frame was right.
+    """
+    import random
+
+    rows = []
+    for g, moves in enumerate(played):
+        for t, (state, action, nxt) in enumerate(moves):
+            before = ""
+            if context and t > 0:
+                p_state, p_action, _ = moves[t - 1]
+                before = enc.prompt(p_state, p_action) + enc.target(state)
+            rows.append({"game": g, "step": t, "length": len(state), "dead": nxt is None,
+                         "prompt": before + enc.prompt(state, action),
+                         "truth": enc.target(nxt)[:-1]})
+    if sample and sample < len(rows):
+        rows = random.Random(seed).sample(rows, sample)
+    texts = generated(model, enc, [r["prompt"] for r in rows])
+    for r, text in zip(rows, texts, strict=True):
+        r["right"] = text == r["truth"]
+        del r["prompt"], r["truth"]
+    return rows
