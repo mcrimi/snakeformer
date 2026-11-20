@@ -49,6 +49,24 @@ def write_weights(model: GPT, enc: Encoding, path, **about) -> Path:
 
 
 @torch.no_grad()
+def read_weights(path) -> tuple[GPT, dict]:
+    """Load a weights file written by write_weights."""
+    from .model import Config
+
+    raw = Path(path).read_bytes()
+    (n,) = struct.unpack("<I", raw[:4])
+    header = json.loads(raw[4 : 4 + n])
+    model = GPT(Config(**header["config"]))
+    state = {}
+    for t in header["tensors"]:
+        size = int(np.prod(t["shape"]))
+        data = np.frombuffer(raw, "<f2", count=size, offset=4 + n + 2 * t["offset"])
+        state[t["name"]] = torch.tensor(data.astype(np.float32)).reshape(t["shape"])
+    model.load_state_dict(state)
+    return model.eval(), header
+
+
+@torch.no_grad()
 def greedy(model: GPT, enc: Encoding, prompt: str, limit: int = 300) -> str:
     """Generate until the stop token, taking the most likely token each time."""
     dev = next(model.parameters()).device
