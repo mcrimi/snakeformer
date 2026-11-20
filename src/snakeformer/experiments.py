@@ -1,0 +1,57 @@
+"""The training runs behind the report.
+
+Each run is a named recipe. All of them train the same small network on the
+same positions for the same number of steps, so that a difference in the
+result can be put down to the one thing that was changed.
+"""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+from . import ENCODINGS
+from .data import generate, keys
+from .evaluate import by_kind, exact
+from .model import save
+from .train import train
+
+TRAIN_N, TEST_N, STEPS = 300_000, 6_000, 20_000
+
+RUNS = {
+    # name: (encoding, how sequences are cut, where food appears)
+    "arrows-aligned": ("arrows", "aligned", None),
+    "frame-aligned": ("frame", "aligned", None),
+    "frame-stream": ("frame", "stream", None),
+    "arrows-stream": ("arrows", "stream", None),
+    "arrows-random-food": ("arrows", "aligned", "random"),
+}
+
+
+def datasets(food=None, train_n=TRAIN_N, test_n=TEST_N):
+    """Training positions, and test positions that are not among them."""
+    training = generate(train_n, seed=1, food_at=food, check=False)
+    test = generate(test_n, seed=2, food_at=food, exclude=keys(training))
+    return training, test
+
+
+def run(name: str, out="runs", steps: int = STEPS, train_n: int = TRAIN_N) -> dict:
+    enc_name, mode, food = RUNS[name]
+    enc = ENCODINGS[enc_name]
+    training, test = datasets(food, train_n)
+    out = Path(out) / name
+    out.mkdir(parents=True, exist_ok=True)
+    log: list[dict] = []
+
+    def score(model):
+        shares = {k: v["share"] for k, v in by_kind(test, exact(model, test, enc)).items()}
+        (out / "log.json").write_text(json.dumps(log + [{"partial": shares}]))
+        return shares
+
+    model = train(training, enc, steps, mode=mode, log=log, on_eval=score,
+                  batch=64 if mode == "aligned" else 32)
+    save(model, out / "model.pt", encoding=enc_name, mode=mode, steps=steps)
+    result = {"name": name, "encoding": enc_name, "mode": mode, "food": food or "rule",
+              "steps": steps, "train_n": train_n, "params": model.n_params(), "log": log}
+    (out / "log.json").write_text(json.dumps(result))
+    return result

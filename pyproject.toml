@@ -1,0 +1,34 @@
+[project]
+name = "snakeformer"
+version = "2.0.0"
+description = "A transformer trained from scratch to simulate the game of Snake, and a study of what it can and cannot learn."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "GPL-3.0-only" }
+authors = [{ name = "Mariano Crimi" }]
+dependencies = ["torch>=2.2", "numpy>=1.26", "huggingface_hub>=0.20"]
+
+[project.scripts]
+snakeformer = "snakeformer.cli:main"
+
+[dependency-groups]
+dev = ["pytest>=8", "ruff>=0.8"]
+report = ["matplotlib>=3.9", "jupyter>=1.1", "pandas>=2.2", "tabulate>=0.9"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/snakeformer"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+extend-exclude = ["game", "games", "dataset", "training", "model", "play.py"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+ignore = ["E731", "E741"]
