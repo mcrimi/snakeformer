@@ -1,0 +1,57 @@
+/* Paper and ink, matching marianocrimi.com (see web/got.css). */
+@font-face { font-family: "Literata"; font-style: normal; font-weight: 400 700; font-display: swap; src: url(https://marianocrimi.com/assets/fonts/literata-normal-400-700-latin.woff2) format("woff2"); }
+@font-face { font-family: "Literata"; font-style: italic; font-weight: 400; font-display: swap; src: url(https://marianocrimi.com/assets/fonts/literata-italic-400-latin.woff2) format("woff2"); }
+@font-face { font-family: "Source Sans 3"; font-style: normal; font-weight: 400 600; font-display: swap; src: url(https://marianocrimi.com/assets/fonts/source-sans-3-normal-400-600-latin.woff2) format("woff2"); }
+@font-face { font-family: "IBM Plex Mono"; font-style: normal; font-weight: 400; font-display: swap; src: url(https://marianocrimi.com/assets/fonts/ibm-plex-mono-normal-400-latin.woff2) format("woff2"); }
+
+:root { --paper: #ECEBE6; --ink: #1B1B19; --ink-2: #5E5D58; --line: #C4C3BC;
+  --serif: Literata, "Iowan Old Style", Georgia, serif;
+  --sans: "Source Sans 3", "Helvetica Neue", Arial, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, Menlo, monospace; }
+:root[data-paper="grey"] { --paper: #E2E2DF; --line: #BEBEBA; }
+:root[data-theme="dark"] { --paper: #161615; --ink: #E4E2DB; --ink-2: #9B9992; --line: #3B3A37; color-scheme: dark; }
+
+* { box-sizing: border-box; }
+body { max-width: calc(44rem + 32px); margin: 0 auto; padding: 0 16px 5rem; background: var(--paper); color: var(--ink); font: 400 1.0625rem/1.6 var(--serif); }
+::selection { background: var(--ink); color: var(--paper); }
+a { color: inherit; text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 0.18em; }
+a:hover { background: var(--ink); color: var(--paper); text-decoration: none; }
+
+.back { display: block; margin: 0; padding: 0.7rem 0; border-bottom: 1px solid var(--ink); font: 600 13px/1.4 var(--sans); }
+.back a { text-decoration: none; }
+
+h1, h2, h3, h4 { font-family: var(--serif); font-weight: 500; text-wrap: balance; }
+h1.title { margin: 2.5rem 0 0.4rem; font-size: 2.4rem; line-height: 1.1; }
+.subtitle { margin: 0 0 1rem; font-size: 1.25rem; line-height: 1.4; color: var(--ink); }
+.author, .quarto-title-meta, .quarto-title-meta-heading, .quarto-title-meta-contents { margin: 0; font: 400 14px/1.5 var(--sans); color: var(--ink-2); }
+h2 { margin: 3rem 0 1rem; padding-top: 1.5rem; border-top: 1px solid var(--ink); font-size: 1.7rem; line-height: 1.2; }
+h3 { margin: 2rem 0 0.6rem; font-size: 1.2rem; font-weight: 600; }
+p { margin: 0 0 1em; text-wrap: pretty; }
+
+nav#TOC { margin-top: 1.5rem; padding: 1rem 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); font: 400 14px/1.6 var(--sans); }
+nav#TOC > h2 { margin: 0 0 0.4rem; padding: 0; border: 0; font: 500 11px/1 var(--sans); letter-spacing: 0.09em; text-transform: uppercase; color: var(--ink-2); }
+nav#TOC ul { margin: 0; padding: 0; list-style: none; columns: 2; column-gap: 2rem; }
+nav#TOC a { text-decoration: none; }
+nav#TOC a:hover { background: transparent; color: inherit; text-decoration: underline; }
+
+code, pre { font-family: var(--mono); font-size: 0.82em; }
+pre { margin: 0 0 1rem; padding: 0.8rem 1rem; border: 1px solid var(--line); overflow-x: auto; line-height: 1.5; }
+pre code { font-size: 12.5px; }
+pre code span { color: inherit !important; font-style: normal !important; font-weight: 400 !important; }
+details { margin: 0 0 1rem; }
+details > summary { display: inline-block; padding: 0.25rem 0.55rem; border: 1px solid var(--ink); font: 500 11px/1 var(--sans); letter-spacing: 0.09em; text-transform: uppercase; cursor: pointer; list-style: none; }
+details > summary::-webkit-details-marker { display: none; }
+details[open] > summary { background: var(--ink); color: var(--paper); margin-bottom: 0.5rem; }
+
+table { width: 100%; margin: 0 0 1.5rem; border-collapse: collapse; font: 400 14px/1.4 var(--sans); font-variant-numeric: tabular-nums; }
+th, td { padding: 0.45rem 0.8rem 0.45rem 0; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+thead th { border-bottom: 1px solid var(--ink); font: 500 11px/1.2 var(--sans); letter-spacing: 0.09em; text-transform: uppercase; color: var(--ink-2); }
+.cell-output-display { overflow-x: auto; }
+
+figure { margin: 1.5rem 0; }
+figure img, .cell-output-display img { display: block; max-width: 100%; height: auto; mix-blend-mode: multiply; }
+figcaption { margin-top: 0.4rem; font: 400 12.5px/1.45 var(--sans); color: var(--ink-2); }
+/* Plots are drawn ink-on-paper; on Night paper they are inverted to match. */
+:root[data-theme="dark"] figure img, :root[data-theme="dark"] .cell-output-display img { filter: invert(1) hue-rotate(180deg); mix-blend-mode: screen; }
+
+@media (max-width: 600px) { h1.title { font-size: 1.9rem; } h2 { font-size: 1.4rem; } nav#TOC ul { columns: 1; } }

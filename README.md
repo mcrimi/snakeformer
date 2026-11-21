@@ -1,4 +1,7 @@
 [![Hugging Face](https://img.shields.io/badge/Hugging%20Face-Model-orange?style=flat&logo=huggingface)](https://huggingface.co/mcrimi/snakeformer)
+[![Play it in the browser](https://img.shields.io/badge/Play%20it-in%20your%20browser-black)](https://marianocrimi.com/snakeformer/)
+[![Report](https://img.shields.io/badge/Report-the%20measurements-black)](https://marianocrimi.com/snakeformer/report/)
+[![CI](https://github.com/mcrimi/snakeformer/actions/workflows/ci.yml/badge.svg)](https://github.com/mcrimi/snakeformer/actions/workflows/ci.yml)
 [![License: GPL3](https://img.shields.io/badge/License-GPL--3.0-blue?logo=gnu)](LICENSE)
 
 
@@ -27,6 +30,28 @@ It's slow, it's an overkill. It was fun to build. 🤷🏻‍♂️
 This repo contains the code for the game console, the training pipeline (see [Pre-Training](#pre-training)) and the data generation pipeline (see [Data Generation](#data-generation)). 
 
 I'm also publishing the model weights in [Huggingface](https://huggingface.co/mcrimi/snakeformer) so you can play it right away.
+
+
+# Then I measured it
+
+When I published this I judged the model the way you judge a game: I played it, it felt right, done. Later I came back and measured it against the real rules, frame by frame. You can [play the model in your browser](https://marianocrimi.com/snakeformer/) with the rules checking every cell, and read [the full report](https://marianocrimi.com/snakeformer/report/). The short version:
+
+| | Frames right in play | Hard positions | Games right for 400 turns |
+|---|---|---|---|
+| Published checkpoint | 98.3% | 81.7% | 10 of 200 |
+| Published, after three rounds of retraining on its own mistakes | 99.8% | 99.7% | 124 of 200 |
+| Small model (0.9M), trained for the browser, same treatment | 99.4% | 97.1% | 26 of 200 |
+
+*Play: 200 games, 75,840 frames, by a food-seeking bot. Hard positions: 6,000 held-out positions with long snakes, meals, every kind of death and reversals. A frame is right only if all 256 cells are.*
+
+- **98% right is a short game.** One wrong frame and you are playing something else. Half of the published model's games had gone wrong by turn 156.
+- **A model is good where its data was.** The published model gets 19% of reversals right, because the game filters that key out and the model never had to learn it. A model I trained on hard positions aced those and was worse at plain play.
+- **Shadow Mode, left running, does not settle.** Correcting one mistake at a time for 300 games swings the scores up and down by several points. And the 50x weight does nothing: the gradient is clipped to a fixed length right after, and every single step was long enough to be clipped.
+- **Collecting the mistakes and retraining (DAgger) works.** That is the second row of the table.
+- **The tail problem has a sequel.** Even with `#` for the tail, the body does not say which way the snake runs, so some pictures fit two different snakes. Drawing the body with arrows fixes it. It also turned out not to matter for the scores, which I did not expect.
+- **Randomness can be learned.** I was wrong about this below. The model learns the odds of random food fine. Greedy decoding is what cannot use them.
+
+The original text follows, with a note wherever the measurements changed the story.
 
 
 # Quickstart
@@ -315,6 +340,8 @@ The game constructs a mini-batch consisting of the *exact* context that caused t
 
 This 50x multiplier forces the model to prioritize "keeping the snake alive" and "eating food" over merely getting the background dots correct. This might be an overkill, but it worked in my experiments. Feel free to tinke around.
 
+> **Measured later:** the 50x does nothing. The gradient is clipped to norm 0.5 right after the loss is scaled, and in 3,700 correction steps every one was above the limit, weighted or not (typical norm 28 to 64 unweighted, 1,100 to 3,000 weighted). Run unattended over 300 games, the loop took the published model from 98.4% to 99.2% of frames right, dipping to 93.7% on the way, and made a second model worse. It is still the most fun part of the project. For actually improving a model, collect the mistakes and retrain: `snakeformer aggregate`.
+
 After a few iterations, the model learns to correct its behavior and the game resumes. You can then save the enlightened model back to disk.
 
 
@@ -323,14 +350,16 @@ After a few iterations, the model learns to correct its behavior and the game re
 Here's a bespoke transformer model for reptiles:
   
 - **Architecture**: Decoder-only Transformer (GPT)
-- **Parameters**: ~0.93 Million 
-- **Layers**: 4
-- **Attention Heads**: 8
-- **Embedding Dimension**: 128
+- **Parameters**: 2.87 Million
+- **Layers**: 6
+- **Attention Heads**: 6
+- **Embedding Dimension**: 192
 - **Context Window**: 1024 tokens
 - **Vocabulary Size**: 16
 
 ![Model](media/model.png)
+
+> An earlier version of this README listed 4 layers, 8 heads, width 128 and ~0.93M parameters. Those are the defaults in `model/gpt.py`, not what I trained; the checkpoint on Hugging Face is the one above. The small model that runs in the browser has exactly the old shape: 4 layers, 8 heads, width 128.
 
 # Learnings
 
@@ -352,6 +381,8 @@ When the model is unsure which segment to delete (the tail) in the next board st
 Changing the tail character to a unique token (`T`) solves this instantly. It makes the state fully observable from a single frame, allowing the model to learn the simple rule: *"Find `#T` and turn it into `.`"*.
 
 I could also have changed training and gamplay+inference to cater for longer context wiindows, but this did the trick alrady.
+
+> **Measured later:** it did most of the trick. The body `O` still does not say in which order the segments come, so when the tail touches two body cells the picture fits two different snakes, and the next tail is undetermined. About 3% of ordinary moves in my test positions are like this, none for short snakes and nine in ten for long coiled ones. The arrows encoding (`src/snakeformer/encoding.py`) draws each segment pointing at the next and removes the problem. Honest footnote: a model trained with `O` scores the same as one trained with arrows, because snakes lie in habitual ways and the model learns the likely reading.
 
 
 ## Can randomness be learned?
@@ -381,6 +412,29 @@ Theoretically yes, but not without adding quite some complexity:
 
 - Pass a random seed as input so the model can learn (board, action, seed) → next_state
 - Use an architecture designed for multimodal outputs (VAEs, diffusion). Or at least this is what Claude Opus 4.5 told me. I would like to try that.
+
+> **Measured later:** none of that is needed, and the reasoning above is wrong. A language model does not output one answer, it outputs odds. I trained the same network on random food and it learned them: writing the frame cell by cell, with k free cells left and no food yet, it gives the next free cell a chance close to 1/k. What failed was greedy decoding, which always takes "no food here" because that is the likeliest character at every single cell. Sampling from the model instead gives a legal frame with exactly one food 91% of the time, spread evenly over the free cells.
+
+
+# The measured version
+
+Everything behind the numbers above is a small package in `src/snakeformer`, with tests.
+
+```bash
+uv sync                                     # or: pip install -e .
+uv run pytest                               # rules, encodings, network, trainer, export
+uv run snakeformer train arrows-aligned     # train a model (hours on a laptop)
+uv run snakeformer polish original --mortal # Shadow Mode over 300 games, measured
+uv run snakeformer aggregate original       # collect mistakes, retrain, three rounds
+uv run snakeformer build                    # weights for the browser + web/data/experiments.json
+npm test                                    # the JavaScript model against PyTorch
+```
+
+- `engine.py` is the rules without the terminal, tested move for move against `games/snake.py`.
+- `web/` is the page: the network in a few hundred lines of JavaScript, running the weights as 16-bit floats (5.7 MB for the published model, whose checkpoint is 163 MB mostly because 36 attention masks were saved with it).
+- `report/index.qmd` is the report, rendered by CI from the committed results.
+
+The terminal game, the data generator and the original training script are untouched.
 
 
 # Tech Stack

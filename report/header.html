@@ -1,0 +1,11 @@
+<script>
+  // Follow the reading settings chosen on marianocrimi.com (same storage key).
+  (function () {
+    var s = {};
+    try { s = JSON.parse(localStorage.getItem("mcrimi-site") || "{}") || {}; } catch (e) {}
+    document.documentElement.dataset.theme = s.paper === "night" ? "dark" : "light";
+    if (s.paper === "grey") document.documentElement.dataset.paper = "grey";
+  })();
+</script>
+<script src="/assets/moon-margin.js" data-external="1" defer data-slug="into-my-universe-without-me" data-title="Into My Universe Without Me" data-year="2022" data-mode="margin" data-focus="0.6,0.4"
+  data-alt="A figure in black walks down a pale staircase in the dark; beside it float a head, a hand and a pair of feet with no body between them"></script>
