@@ -191,10 +191,13 @@
     </figure>
     <div class="prose">
       <p>The repair is to draw the body with arrows, each segment pointing to the next. Then one frame holds the whole snake and the question has one answer. The retrained model on this page reads and writes boards that way, which is why its text looks different from the 2026 one.</p>
-      <p id="twins-verdict">Does it matter in practice? Less than I expected. I trained the same small network twice, once with each drawing, and tested both on 1,000 positions that have two readings.</p>
+      <p>Does it matter in practice? I expected it to, and it did not. I trained the same small network twice, once with each drawing, and tested both on 1,000 positions that have two readings. They score the same.</p>
     </div>
     <div class="table-wrap">
       <table id="twins-table" class="data"></table>
+    </div>
+    <div class="prose">
+      <p>A model that truly had to guess between two readings would be right half the time. It does not have to guess. In these games snakes lie in habitual ways, so one reading is far more likely than the other and the model learns which. The flaw is real, and the habits of the player hide it. Arrows are the right drawing; they are not why any model here is better than another.</p>
     </div>
   </section>
 
@@ -236,7 +239,8 @@
     <div class="prose">
       <p>It does not settle. Each correction fixes the frame in front of it and moves everything else a little. The published model ends slightly better in play than it started, after dipping well below on the way. The retrained model ends worse on both counts. With a player that never dies the loop teaches the model that nobody dies: frames in play rise to <span data-fill="original-polished.play.after">99.4%</span> while deaths at a wall fall from <span data-fill="original-polished.wall.before">97%</span> right to <span data-fill="original-polished.wall.after">14%</span>.</p>
       <p>The fifty-fold weight turns out to do nothing. The step is cut to a fixed length before it is applied, and every one of the <span data-fill="original-polished-mortal.grad.steps">1,014</span> steps was long enough to be cut: a typical unweighted mistake was <span data-fill="original-polished-mortal.grad.plain">28</span> on a scale where the limit is 0.5, a weighted one <span data-fill="original-polished-mortal.grad.weighted">3,022</span>. After the cut they are the same size.</p>
-      <p>The other way is in the 2026 code as well, as the data option I called DAgger: let the model shadow many games, keep every frame it gets wrong, then train on them. I mixed the mistakes half and half with the positions the model first learned from, so that it rehearses what it knew while it fixes what it did not. Three rounds of that took the retrained model from <span data-fill="arrows-aligned.play">95%</span> to <span data-fill="arrows-aligned-aggregated.play">99%</span> in play and kept what it knew about hard positions. Each round found fewer new mistakes: <span data-fill="arrows-aligned-aggregated.first">2,493</span> in the first, <span data-fill="arrows-aligned-aggregated.last">404</span> in the third. That model is the default at the top of this page.</p>
+      <p>The other way is in the 2026 code as well, as the data option I called DAgger: let the model shadow many games, keep every frame it gets wrong, then train on them. I mixed the mistakes half and half with the positions the model first learned from, so that it rehearses what it knew while it fixes what it did not. Three rounds of that took the published model from <span data-fill="original.play">98.3%</span> of frames right in play to <span data-fill="original-aggregated.play">99.8%</span>, and from <span data-fill="original.stress">82%</span> to <span data-fill="original-aggregated.stress">99.7%</span> on the hard positions. <span data-fill="original-aggregated.clean">124</span> of its <span data-fill="games">200</span> games now run the full 400 turns without one wrong frame; before, <span data-fill="original.clean">10</span> did. Part of the gain on hard positions comes from the rehearsal half, since those were positions the published model had never been trained on. Each round found fewer new mistakes: <span data-fill="original-aggregated.first">1,037</span> in the first, <span data-fill="original-aggregated.last">102</span> in the third.</p>
+      <p>The small retrained model gains too, from <span data-fill="arrows-aligned.play">95%</span> to <span data-fill="arrows-aligned-aggregated.play">99%</span> in play, but it stays behind, and it still misses most of the rare deaths where the snake boxes itself in. Both are in the chooser at the top. The small one is the default because it writes three times faster; the published one after its mistakes is the closest thing here to the real game.</p>
     </div>
     <div class="table-wrap">
       <table id="learn-table" class="data"><caption class="cap">Before → after, measured on 60 games and 6,000 hard positions that neither method trained on. “One at a time” is Shadow Mode left running; “collect, then retrain” is three rounds of 600 games.</caption></table>
@@ -245,6 +249,7 @@
     <h3>4. How it is trained matters more than how the board is drawn</h3>
     <div class="prose" id="recipe-prose">
       <p>The 2026 training joined all the examples into one long text, cut windows from it at random places, and scored every character. Half of what it scored is the input board and the move, which the model is never asked to produce, and a window could begin anywhere inside an example. The retraining gives the model one example at a time, always in the same place, and scores only the frame it is asked to write.</p>
+      <p>Same network, same positions, the same reading per step: after 20,000 steps the 2026 way gets <span data-fill="frame-stream.stress">74%</span> of the hard positions right and <span data-fill="frame-stream.play">62%</span> of frames in play, and has not learned to eat. The other way gets <span data-fill="frame-aligned.stress">98%</span> and <span data-fill="frame-aligned.play">95%</span>. The two drawings of the board, trained the same way, finish together. The published model got as far as it did on the 2026 recipe by being three times larger and training for longer.</p>
     </div>
     <figure class="chart">
       <svg id="curve-chart" role="img" aria-labelledby="curve-cap"></svg>
@@ -254,6 +259,7 @@
     <h3>5. Can randomness be learned?</h3>
     <div class="prose" id="food-prose">
       <p>In 2026 I gave up on food that appears at random and made its position a fixed function of the head, writing that a model trained to predict the next character cannot learn a random outcome. I tested that. I trained the same network on games with random food and asked it, after each meal, how likely food is at each free cell as it writes the frame.</p>
+      <p>It learned the odds. Where I went wrong was in reading the answer: I always took the single most likely character, and with many free cells left “no food here” is always the most likely, so food never appeared. If each character is drawn from the model’s own odds instead, <span data-fill="food.legal">91%</span> of <span data-fill="food.frames">300</span> frames are legal, with the right snake and exactly one food, and the food lands evenly over the free cells. The model could do it. The decoding could not.</p>
     </div>
     <div class="pair">
       <figure class="chart">

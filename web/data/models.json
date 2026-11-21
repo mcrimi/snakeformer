@@ -2,16 +2,24 @@
  {
   "id": "arrows",
   "file": "arrows.bin",
-  "label": "Retrained, arrows",
-  "note": "Trained for this page: 4 layers, 0.9M parameters. Each body segment points to the next.",
+  "label": "Small, retrained",
+  "note": "Trained for this page, then on its own mistakes: 4 layers, 0.9M parameters. Each body segment points to the next. The fastest of the three.",
   "bytes": 1861284,
   "default": true
+ },
+ {
+  "id": "polished",
+  "file": "polished.bin",
+  "label": "Published, then its mistakes",
+  "note": "The 2026 checkpoint after three rounds of collecting its mistakes and retraining. The most accurate, and about three times slower here.",
+  "bytes": 5743796,
+  "default": false
  },
  {
   "id": "original",
   "file": "original.bin",
   "label": "Published, 2026",
-  "note": "The checkpoint on Hugging Face: 6 layers, 2.9M parameters, boards drawn with H, O and #.",
+  "note": "The checkpoint on Hugging Face, as published: 6 layers, 2.9M parameters, boards drawn with H, O and #.",
   "bytes": 5743796,
   "default": false
  }

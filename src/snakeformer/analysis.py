@@ -164,10 +164,15 @@ def food_samples(model, enc: Encoding, n: int = 300, seed: int = 22) -> dict:
     meals = [e for e in generate(40 * n, seed=seed, food_at="random") if e.kind == "eat"][:n]
     dev = next(model.parameters()).device
     torch.manual_seed(seed)
-    ids = torch.tensor([enc.encode(enc.prompt(e.state, e.action)) for e in meals], device=dev)
-    for _ in range(len(enc.target(meals[0].next))):
-        nxt = torch.multinomial(model(ids)[:, -1].softmax(-1), 1)
-        ids = torch.cat([ids, nxt], 1)
+    written = []
+    for at in range(0, len(meals), 32):
+        rows = [enc.encode(enc.prompt(e.state, e.action)) for e in meals[at : at + 32]]
+        ids = torch.tensor(rows, device=dev)
+        for _ in range(len(enc.target(meals[0].next))):
+            nxt = torch.multinomial(model(ids)[:, -1].softmax(-1), 1)
+            ids = torch.cat([ids, nxt], 1)
+        written.append(ids.cpu())
+    ids = torch.cat(written)
     legal, ranks = 0, []
     for ex, row in zip(meals, ids[:, PROMPT_LEN:].tolist(), strict=True):
         text = enc.decode(row)
@@ -209,11 +214,13 @@ def build(root=".", out="web/data/experiments.json", n_games: int = 200) -> dict
     original = published(root)
     if original is not None:
         result["models"]["original"] = measure(original, FRAME, test, played, "original", twins)
+        print("measured original", flush=True)
     for name, (enc_name, mode, food) in RUNS.items():
         folder = root / "runs" / name
         if not (folder / "model.pt").exists():
             continue
         log = json.loads((folder / "log.json").read_text())
+        print("measuring", name, flush=True)
         model, _ = load(folder / "model.pt")
         enc = ENCODINGS[enc_name]
         entry = {"encoding": enc_name, "mode": mode, "food": food or "rule",

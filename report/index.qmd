@@ -51,8 +51,8 @@ STYLES = ["-", "--", ":", "-."]
 root = Path.cwd() if (Path.cwd() / "web").exists() else Path.cwd().parent
 D = json.loads((root / "web" / "data" / "experiments.json").read_text())
 M, RUNS, POLISH, AGG = D["models"], D["runs"], D["polish"], D["aggregate"]
-NAMES = {"original": "Published, 2026", "frame-aligned": "Retrained, H O #",
-         "arrows-aligned": "Retrained, arrows", "arrows-aligned-aggregated": "Retrained, then mistakes",
+NAMES = {"original": "Published, 2026", "frame-aligned": "Small, H O #",
+         "arrows-aligned": "Small, arrows", "arrows-aligned-aggregated": "Small, then mistakes",
          "original-aggregated": "Published, then mistakes", "frame-stream": "2026 recipe, H O #"}
 pct = lambda v, d=1: "–" if v is None else f"{100 * v:.{d}f}%"
 table = lambda df, **kw: Markdown(df.to_markdown(index=False, **kw))
@@ -68,7 +68,7 @@ def kind(m, k):
 
 
 O, A, F = M["original"], M["arrows-aligned"], M["frame-aligned"]
-G = M["arrows-aligned-aggregated"]
+G, OG = M["arrows-aligned-aggregated"], M["original-aggregated"]
 P_ORIG, P_ARROWS = POLISH["original-polished-mortal"], POLISH["arrows-aligned-polished-mortal"]
 P_CAREFUL = POLISH["original-polished"]
 ```
@@ -82,7 +82,6 @@ the real rules, and measures the ideas in the original write-up.
 
 ```{python}
 #| echo: false
-first, last = AGG["arrows-aligned-aggregated"]["log"][0], AGG["arrows-aligned-aggregated"]["log"][-1]
 Markdown(f"""
 - **A high share of right frames is still a short game.** The published model writes
   {pct(O['play']['frames']['share'])} of frames exactly right in ordinary play. Half of
@@ -94,14 +93,18 @@ Markdown(f"""
   {pct(hard(A))} of those and only {pct(A['play']['frames']['share'])} in ordinary play.
 - **Correcting one mistake at a time does not settle.** Shadow Mode left running for 300 games
   moved the published model from {pct(P_ORIG['log'][0]['play'])} to {pct(P_ORIG['log'][-1]['play'])}
-  in play with large swings on the way, and made the retrained model worse. Its fifty-fold
+  in play with large swings on the way, and made the small model worse. Its fifty-fold
   weight on important mistakes has no effect, because every step is clipped to the same length.
-- **Collecting the mistakes and retraining works.** Three rounds took the retrained model from
-  {pct(first['play'])} to {pct(last['play'])} in play while it kept {pct(last['all'])} on the
-  hard positions.
+- **Collecting the mistakes and retraining works.** Three rounds took the published model to
+  {pct(OG['play']['frames']['share'])} in play and {pct(hard(OG))} on the hard positions;
+  {OG['play']['clean_games']} of {D['games']['n']} games now run 400 turns without a wrong frame.
 - **The drawing of the board has a flaw that I could not make matter.** With H, O and # some
   pictures fit two different snakes. Drawing the body with arrows removes the ambiguity, and
-  changes the scores very little.
+  does not change the scores.
+- **The training recipe matters, and randomness can be learned.** Scoring only the answer,
+  one example per sequence, gets {pct(hard(F))} of hard positions where the 2026 recipe gets
+  {pct(hard(M['frame-stream']))} at the same budget. Trained on random food, the model learns
+  the right odds; greedy decoding was what failed.
 """)
 ```
 
@@ -115,7 +118,7 @@ s = State(((7, 7), (7, 6), (6, 6), (5, 6), (4, 6)), (7, 13))
 nxt, _ = step(s, "U")
 text = FRAME.prompt(s, "U") + FRAME.target(nxt)
 lines = text.split("\n")
-Markdown("```text\n" + "\n".join(lines[:1] + lines[5:10] + ["…"] + lines[17:20] + lines[23:28] + ["…", "$"]) + "\n```")
+Markdown("~~~text\n" + "\n".join(lines[:1] + lines[5:10] + ["…"] + lines[17:20] + lines[23:28] + ["…", "$"]) + "\n~~~")
 ```
 
 The prompt is 282 characters and the answer 274. A frame counts as right only if every
@@ -151,15 +154,15 @@ na, nb = step(a, "R")[0], step(b, "R")[0]
 Markdown(f"""Two snakes, drawn with arrows that point from each segment to the next (left, right),
 and the one picture both make with H, O and # (middle). The pictures are identical: **{same}**.
 
-```text
+~~~text
 {side(crop(ARROWS.board(a)), crop(FRAME.board(a)), crop(ARROWS.board(b)))}
-```
+~~~
 
 After one move to the right the two games differ:
 
-```text
+~~~text
 {side(crop(FRAME.board(na)), ["      "] * 5, crop(FRAME.board(nb)))}
-```
+~~~
 """)
 ```
 
@@ -188,14 +191,15 @@ readings.
 rows = [{"Model": NAMES[k], "Boards drawn with": "Arrows" if M[k]["encoding"] == "arrows" else "H O #",
          "Two-reading positions right": pct(M[k]["two_readings"]["share"]),
          "95% interval": f"{pct(M[k]['two_readings']['lo'], 0)} to {pct(M[k]['two_readings']['hi'], 0)}"}
-        for k in ("original", "frame-aligned", "arrows-aligned")]
+        for k in ("frame-aligned", "arrows-aligned", "original")]
 table(pd.DataFrame(rows))
 ```
 
-A model that had to guess between two readings would be right half the time. The H, O, # models
-do much better than that, because in the games they were trained on one reading is far more
-common than the other: a snake that has been following the food lies in a predictable way.
-The flaw is real, and a model can lean on the habits of its player to hide it. In play the
+A model that had to guess between two readings would be right half the time. The small H, O, #
+model scores the same as the arrows model, because in the positions both were trained on one
+reading is far more common than the other: snakes lie in habitual ways. The flaw is real, and a
+model can lean on the habits of its player to hide it. A player with other habits would expose
+it; that has not been tested here. In play the
 original game also keeps the previous turn in the context, which in principle settles the
 question. Measured on 400 frames generated exactly as the terminal game does it, that made no
 difference: `{python} D['context']['cold']['right']` right without the previous turn,
@@ -207,7 +211,7 @@ difference: `{python} D['context']['cold']['right']` right without the previous 
 #| echo: false
 #| fig-cap: "Share of games in which every frame so far is right, by turn."
 fig, ax = plt.subplots()
-for i, k in enumerate(["arrows-aligned-aggregated", "original", "arrows-aligned", "frame-aligned"]):
+for i, k in enumerate(["original-aggregated", "arrows-aligned-aggregated", "original", "arrows-aligned"]):
     ax.plot(M[k]["play"]["alive"], STYLES[i], color=INK, lw=1.4, label=NAMES[k])
 ax.set_xlabel("Turn")
 ax.set_ylim(0, 1)
@@ -220,10 +224,10 @@ plt.show()
 #| echo: false
 rows = [{"Model": NAMES[k], "Parameters": f"{M[k]['params'] / 1e6:.2f}M",
          "Frames right in play": pct(M[k]["play"]["frames"]["share"]),
-         "Median first wrong frame": M[k]["play"]["median_first_error"],
+         "Median first wrong frame": M[k]["play"]["median_first_error"] if M[k]["play"]["median_first_error"] < 1e6 else "past 400",
          "Games right to the end": f"{M[k]['play']['clean_games']} of {M[k]['play']['games']}",
          "Hard positions": pct(hard(M[k]))}
-        for k in ("original", "frame-aligned", "arrows-aligned", "arrows-aligned-aggregated") if k in M]
+        for k in ("original", "original-aggregated", "frame-aligned", "arrows-aligned", "arrows-aligned-aggregated")]
 table(pd.DataFrame(rows))
 ```
 
@@ -241,7 +245,7 @@ flatters it.
 #| echo: false
 labels = {"move": "Ordinary move", "eat": "Eating", "wall": "Hitting a wall", "self": "Hitting itself",
           "reversal": "Turning back on itself"}
-ids = [k for k in ("original", "frame-aligned", "arrows-aligned", "arrows-aligned-aggregated") if k in M]
+ids = ["original", "original-aggregated", "arrows-aligned", "arrows-aligned-aggregated"]
 rows = [{"Position": lab, "Positions": M["original"]["stress"]["kinds"][k]["n"],
          **{NAMES[i]: pct(kind(M[i], k)) for i in ids}} for k, lab in labels.items()]
 rows.append({"Position": "All hard positions", "Positions": D["test_n"], **{NAMES[i]: pct(hard(M[i])) for i in ids}})
@@ -283,7 +287,7 @@ on the hard positions, none of which it is being corrected on.
 #| echo: false
 #| fig-cap: "Frames right in 60 held-out games while the model is corrected one mistake at a time."
 fig, ax = plt.subplots()
-for i, (run, label) in enumerate([(P_ORIG, "Published"), (P_ARROWS, "Retrained"),
+for i, (run, label) in enumerate([(P_ORIG, "Published"), (P_ARROWS, "Small"),
                                   (P_CAREFUL, "Published, player never dies")]):
     ax.plot([r["games"] for r in run["log"]], [r["play"] for r in run["log"]], STYLES[i], color=INK,
             lw=1.4, label=label)
@@ -301,7 +305,7 @@ def trail(run, label):
              "Wall": pct(r["wall"], 0), "Itself": pct(r["self"], 0), "Eating": pct(r["eat"], 0)}
             for r in run["log"][:: max(1, len(run["log"]) // 5)]]
 
-table(pd.DataFrame(trail(P_ORIG, "Published") + trail(P_ARROWS, "Retrained")
+table(pd.DataFrame(trail(P_ORIG, "Published") + trail(P_ARROWS, "Small")
                    + trail(P_CAREFUL, "Published, player never dies")))
 ```
 
@@ -325,7 +329,7 @@ rows = [{"Run": label, "Steps, unweighted": g["plain_steps"], "of which clipped"
          "Typical length before clipping": f"{g['plain_median']:.0f}",
          "Steps, weighted ×50": g["weighted_steps"], "of which clipped ": g["weighted_clipped"],
          "Typical length before clipping ": f"{g['weighted_median']:,.0f}"}
-        for label, g in (("Published", P_ORIG["gradient"]), ("Retrained", P_ARROWS["gradient"]))]
+        for label, g in (("Published", P_ORIG["gradient"]), ("Small", P_ARROWS["gradient"]))]
 table(pd.DataFrame(rows))
 ```
 
@@ -345,18 +349,28 @@ learned from. Three rounds.
 rows = []
 for name, run in AGG.items():
     for r in run["log"]:
-        rows.append({"Model": NAMES[run["source"] if run["source"] == "original" else run["source"]],
+        rows.append({"Model": NAMES[run["source"]],
                      "Round": r["round"], "Frames shadowed": r["frames_seen"], "New mistakes": r["new_mistakes"],
-                     "In play": pct(r["play"]), "First wrong frame (median)": r["median_first_error"],
+                     "In play": pct(r["play"]),
+                     "First wrong frame (median)": r["median_first_error"] if r["median_first_error"] < 1e6 else "past 400",
                      "Games right to the end": f"{r['clean_games']} of 60", "Hard positions": pct(r["all"])})
 table(pd.DataFrame(rows))
 ```
 
-Each round finds fewer new mistakes than the one before, play improves round over round, and
-the hard positions are kept because they are rehearsed. The difference from Shadow Mode is not
-the data, which is the same kind of mistake. It is that the mistakes are learned together and
-alongside what the model already knew, with a step size that averages over 64 examples. The
-retrained model after three rounds is the default on the page.
+Each round finds fewer new mistakes than the one before and play improves round over round. On
+the full test the published model after three rounds writes
+`{python} pct(OG['play']['frames']['share'], 2)` of frames right in play and
+`{python} pct(hard(OG))` of the hard positions, and `{python} OG['play']['clean_games']` of
+`{python} D['games']['n']` games run 400 turns without a wrong frame. Two cautions. Part of its
+gain on hard positions comes from the rehearsal half of each batch: those positions were new to
+it. And the small model, while much better in play, gets only
+`{python} pct(G['play']['events']['death']['share'], 0)` of the
+`{python} G['play']['events']['death']['n']` deaths that occur in those games right, all of them
+snakes boxed in by their own body; it was better at these before.
+
+The difference from Shadow Mode is not the data, which is the same kind of mistake. It is that
+the mistakes are learned together and alongside what the model already knew, in batches of 64.
+Both aggregated models are on the page.
 
 ## How it is trained
 
@@ -370,7 +384,7 @@ about the same number of characters per step.
 #| echo: false
 #| fig-cap: "Hard positions exactly right during training, same network and same positions."
 fig, ax = plt.subplots()
-for i, k in enumerate([k for k in ("arrows-aligned", "frame-aligned", "frame-stream") if k in RUNS]):
+for i, k in enumerate(["arrows-aligned", "frame-aligned", "frame-stream"]):
     curve = RUNS[k]["curve"]
     ax.plot([0] + [r["step"] for r in curve], [0] + [r["all"] for r in curve], STYLES[i], color=INK, lw=1.4,
             label=NAMES[k])
@@ -385,12 +399,15 @@ plt.show()
 #| echo: false
 rows = [{"Run": NAMES[k], "Boards": RUNS[k]["encoding"], "Sequences": RUNS[k]["mode"],
          "Hard positions after 20,000 steps": pct(RUNS[k]["curve"][-1]["all"]),
-         "Ordinary moves": pct(RUNS[k]["curve"][-1]["move"]), "Eating": pct(RUNS[k]["curve"][-1]["eat"])}
-        for k in ("arrows-aligned", "frame-aligned", "frame-stream") if k in RUNS]
+         "Ordinary moves": pct(RUNS[k]["curve"][-1]["move"]), "Eating": pct(RUNS[k]["curve"][-1]["eat"]),
+         "Frames right in play": pct(M[k]["play"]["frames"]["share"])}
+        for k in ("arrows-aligned", "frame-aligned", "frame-stream")]
 table(pd.DataFrame(rows))
 ```
 
-The two drawings of the board finish together. The two ways of cutting sequences do not.
+The two drawings of the board finish together. The two ways of cutting sequences do not. The
+published model reached what it did with the 2026 recipe by being three times larger and by
+training for 30,000 steps on a GPU.
 
 ## Can randomness be learned?
 
@@ -408,8 +425,8 @@ failure.
 ```{python}
 #| echo: false
 #| fig-cap: "Left: the chance the model gives to food at a free cell, against 1/k. Right: where the food lands, among the free cells, when frames are sampled from the model."
-food = RUNS.get("arrows-random-food")
-if food:
+food = RUNS["arrows-random-food"]
+if True:
     fig, (ax, bx) = plt.subplots(1, 2, figsize=(7.4, 3.6))
     pts = food["hazard"]["points"]
     lo = min(min(p["ideal"], p["model"]) for p in pts) * 0.7
@@ -427,7 +444,7 @@ if food:
 
 ```{python}
 #| echo: false
-if food:
+if True:
     s = food["samples"]
     display(Markdown(
         f"Trained on random food, the same network follows the $1/k$ rule closely over "

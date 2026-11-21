@@ -27,3 +27,8 @@ model/weights/
 .pytest_cache/
 .ruff_cache/
 node_modules/
+
+# Rendered report
+report/index.html
+report/index_files/
+build/

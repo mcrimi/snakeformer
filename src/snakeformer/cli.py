@@ -17,12 +17,15 @@ from .experiments import RUNS, STEPS, TRAIN_N
 
 # Models the page offers: id -> (run, label, note). "original" is the published checkpoint.
 SHIPPED = {
-    "arrows": ("arrows-aligned-aggregated", "Retrained",
-               "Trained for this page, then retrained on its own mistakes: 4 layers, 0.9M parameters. "
-               "Each body segment points to the next."),
+    "arrows": ("arrows-aligned-aggregated", "Small, retrained",
+               "Trained for this page, then on its own mistakes: 4 layers, 0.9M parameters. "
+               "Each body segment points to the next. The fastest of the three."),
+    "polished": ("original-aggregated", "Published, then its mistakes",
+                 "The 2026 checkpoint after three rounds of collecting its mistakes and retraining. "
+                 "The most accurate, and about three times slower here."),
     "original": (None, "Published, 2026",
-                 "The checkpoint on Hugging Face: 6 layers, 2.9M parameters, boards drawn with H, O and #. "
-                 "About three times slower here."),
+                 "The checkpoint on Hugging Face, as published: 6 layers, 2.9M parameters, boards drawn "
+                 "with H, O and #."),
 }
 
 

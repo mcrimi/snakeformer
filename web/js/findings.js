@@ -43,11 +43,11 @@ const FIGURES = [];
 const figure = (fn) => FIGURES.push(fn);
 const NAMES = {
   original: "Published, 2026",
-  "arrows-aligned": "Retrained, arrows",
-  "frame-aligned": "Retrained, H O #",
+  "arrows-aligned": "Small, arrows",
+  "frame-aligned": "Small, H O #",
   "frame-stream": "2026 recipe, H O #",
   "arrows-stream": "2026 recipe, arrows",
-  "arrows-aligned-aggregated": "Retrained, then mistakes",
+  "arrows-aligned-aggregated": "Small, then mistakes",
   "original-aggregated": "Published, then mistakes",
 };
 const KINDS = [
@@ -71,7 +71,7 @@ figure((d) => {
 figure((d) => {
   const el = svg("alive-chart");
   if (!el) return;
-  const ids = ["arrows-aligned-aggregated", "original", "arrows-aligned", "frame-aligned"].filter((k) => d.models[k]);
+  const ids = ["original-aggregated", "arrows-aligned-aggregated", "original", "arrows-aligned"].filter((k) => d.models[k]);
   drawLines(el, {
     x: [0, 400], y: [0, 1], xLabel: "Turn", yFormat: (v) => pct(v), labelWidth: 160,
     series: ids.map((k, i) => {
@@ -85,11 +85,9 @@ figure((d) => {
 figure((d) => {
   const table = $("kinds-table");
   if (!table) return;
-  const ids = ["original", "frame-aligned", "arrows-aligned", "arrows-aligned-aggregated"].filter((k) => d.models[k]);
+  const ids = ["original", "original-aggregated", "arrows-aligned", "arrows-aligned-aggregated"].filter((k) => d.models[k]);
   const cell = (m, kind) => {
-    const k = kind === "all"
-      ? Object.values(m.stress.kinds).reduce((a, v) => ({ right: a.right + v.right, n: a.n + v.n }), { right: 0, n: 0 })
-      : m.stress.kinds[kind];
+    const k = m.stress.kinds[kind];
     return k ? `<td class="n">${pct(k.right / k.n, 1)}</td>` : `<td class="n">–</td>`;
   };
   const count = (kind) => {
@@ -100,7 +98,7 @@ figure((d) => {
     + KINDS.map(([kind, label]) => `<tr${kind === "all" ? ' class="picked"' : ""}><th>${label}</th><td class="n">${count(kind).toLocaleString("en")}</td>${ids.map((k) => cell(d.models[k], kind)).join("")}</tr>`).join("")
     + `<tr><th>In ordinary play</th><td class="n">${d.games.frames.toLocaleString("en")}</td>${ids.map((k) => `<td class="n">${pct(d.models[k].play.frames.share, 1)}</td>`).join("")}</tr></tbody>`;
   const twins = $("twins-table");
-  const both = ["original", "frame-aligned", "arrows-aligned"].filter((k) => d.models[k] && d.models[k].two_readings);
+  const both = ["frame-aligned", "arrows-aligned", "original"].filter((k) => d.models[k] && d.models[k].two_readings);
   if (twins && both.length) {
     twins.innerHTML = `<thead><tr><th>Model</th><th>Boards drawn with</th><th class="n">Two-reading positions right</th><th class="n">95% interval</th></tr></thead><tbody>`
       + both.map((k) => { const t = d.models[k].two_readings; return `<tr><th>${NAMES[k]}</th><td>${d.models[k].encoding === "arrows" ? "Arrows" : "H O #"}</td><td class="n">${pct(t.share, 1)}</td><td class="n">${pct(t.lo, 0)} to ${pct(t.hi, 0)}</td></tr>`; }).join("") + "</tbody>";
@@ -111,7 +109,7 @@ figure((d) => {
 figure((d) => {
   const el = svg("curve-chart");
   if (!el) return;
-  const ids = ["arrows-aligned", "frame-aligned", "arrows-stream", "frame-stream"].filter((k) => d.runs[k]);
+  const ids = ["arrows-aligned", "frame-aligned", "frame-stream"].filter((k) => d.runs[k]);
   drawLines(el, {
     x: [0, 20000], y: [0, 1], xLabel: "Training steps", yFormat: (v) => pct(v), xFormat: (v) => (v ? `${v / 1000}k` : "0"), labelWidth: 150,
     series: ids.map((k, i) => ({ label: NAMES[k], x: [0, ...d.runs[k].curve.map((r) => r.step)], y: [0, ...d.runs[k].curve.map((r) => r.all)], dash: DASH[i] })),
@@ -122,7 +120,7 @@ figure((d) => {
 figure((d) => {
   const el = svg("polish-play");
   if (!el || !d.polish) return;
-  const runs = [["original-polished-mortal", "Published"], ["arrows-aligned-polished-mortal", "Retrained"], ["original-polished", "Published, no deaths"]]
+  const runs = [["original-polished-mortal", "Published"], ["arrows-aligned-polished-mortal", "Small"], ["original-polished", "Published, no deaths"]]
     .filter(([k]) => d.polish[k]);
   if (!runs.length) return;
   const low = Math.min(...runs.flatMap(([k]) => d.polish[k].log.map((r) => r.play)));
@@ -138,16 +136,17 @@ figure((d) => {
   if (!table) return;
   const rows = [
     ["One at a time", "Published", d.polish && d.polish["original-polished-mortal"]],
-    ["One at a time", "Retrained", d.polish && d.polish["arrows-aligned-polished-mortal"]],
+    ["One at a time", "Small", d.polish && d.polish["arrows-aligned-polished-mortal"]],
     ["Collect, then retrain", "Published", d.aggregate && d.aggregate["original-aggregated"]],
-    ["Collect, then retrain", "Retrained", d.aggregate && d.aggregate["arrows-aligned-aggregated"]],
+    ["Collect, then retrain", "Small", d.aggregate && d.aggregate["arrows-aligned-aggregated"]],
   ].filter((r) => r[2]);
+  const turn = (t) => (t > 1e6 ? "past 400" : t);
   const move = (a, b, digits = 1) => `${pct(a, digits)} → ${pct(b, digits)}`;
   table.innerHTML = `<thead><tr><th>Method</th><th>Model</th><th class="n">Games</th><th class="n">In play</th><th class="n">Hard positions</th><th class="n">Median first wrong frame</th></tr></thead><tbody>`
     + rows.map(([method, model, run]) => {
       const a = run.log[0];
       const b = run.log[run.log.length - 1];
-      return `<tr><th>${method}</th><td>${model}</td><td class="n">${b.games.toLocaleString("en")}</td><td class="n">${move(a.play, b.play)}</td><td class="n">${move(a.all, b.all)}</td><td class="n">${a.median_first_error} → ${b.median_first_error}</td></tr>`;
+      return `<tr><th>${method}</th><td>${model}</td><td class="n">${b.games.toLocaleString("en")}</td><td class="n">${move(a.play, b.play)}</td><td class="n">${move(a.all, b.all)}</td><td class="n">${turn(a.median_first_error)} → ${turn(b.median_first_error)}</td></tr>`;
     }).join("") + "</tbody>";
 });
 
@@ -185,8 +184,7 @@ function numbers(d) {
     put(`${id}.median`, p.median_first_error > 1e6 ? "past 400" : p.median_first_error);
     put(`${id}.clean`, p.clean_games);
     put(`${id}.params`, `${(m.params / 1e6).toFixed(2)}M`);
-    const all = Object.values(m.stress.kinds).reduce((a, v) => ({ right: a.right + v.right, n: a.n + v.n }), { right: 0, n: 0 });
-    put(`${id}.stress`, pct(all.right / all.n, 1));
+    put(`${id}.stress`, pct(m.stress.kinds.all.share, 1));
     for (const [k, v] of Object.entries(m.stress.kinds)) put(`${id}.${k}`, pct(v.share, 0));
     for (const [k, v] of Object.entries(p.events || {})) put(`${id}.play.${k}`, pct(v.share, 1));
     if (m.two_readings) put(`${id}.twins`, pct(m.two_readings.share, 0));
