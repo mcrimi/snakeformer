@@ -49,7 +49,9 @@ def train(examples, enc: Encoding, steps: int, mode: str = "aligned", batch: int
     dev = device()
     model = (start or GPT(config or Config(vocab_size=len(enc.chars)))).to(dev).train()
     opt = torch.optim.AdamW(model.parameters(), lr=lr)
-    sched = torch.optim.lr_scheduler.OneCycleLR(opt, max_lr=lr, total_steps=steps, pct_start=0.05)
+    # A warm-up of exactly one step makes the schedule divide by zero.
+    warm = 0.1 if steps == 20 else 0.05
+    sched = torch.optim.lr_scheduler.OneCycleLR(opt, max_lr=lr, total_steps=steps, pct_start=warm)
     gen = torch.Generator().manual_seed(seed)
     if mode == "aligned":
         ids, scored = tensors(examples, enc)
